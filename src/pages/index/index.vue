@@ -1,41 +1,63 @@
 <template>
-  <view class="page" :class="{ 'has-selection': selected, 'pure-view': materialCollapsed }">
-    <view class="topbar">
-      <view class="brand">
-        <image class="brand-logo" :src="brandLogo" mode="aspectFit" />
-        <image class="brand-wordmark" :src="brandWordmark" mode="aspectFit" />
-      </view>
-      <view class="top-actions">
-        <view class="icon-btn" :class="{ disabled: !canUndo }" @tap="undo">
-          <image class="top-icon-img" :src="undoIcon" mode="aspectFit" />
-        </view>
-        <view class="icon-btn" :class="{ disabled: !canRedo }" @tap="redo">
-          <image class="top-icon-img" :src="redoIcon" mode="aspectFit" />
-        </view>
-        <view class="btn ghost" @tap="saveWork">保存</view>
-        <view class="btn" @tap="exportImage">导出</view>
-      </view>
-    </view>
+  <view
+    class="page"
+    :class="{ 'has-selection': selected, 'pure-view': materialCollapsed, 'stage-zoomed': stageZoomed }"
+    :style="{ backgroundImage: `url(${appWaterBg})` }"
+  >
+    <EditorTopbar
+      :can-undo="canUndo"
+      :can-redo="canRedo"
+      @undo="undo"
+      @redo="redo"
+      @history="openExportHistory"
+      @export="exportImage"
+    />
 
-    <view class="stage-wrap">
-      <view v-if="!materialCollapsed" class="stage-tools">
-        <view class="tool-pill" :class="{ on: showGrid }" @tap="toggleGrid">网格</view>
-        <view class="tool-pill" @tap="fitSelection">居中</view>
-      </view>
-
-      <view class="stage" :style="{ width: cw + 'px', height: ch + 'px' }" @tap="onStageTap">
+    <view class="stage-wrap" @tap="onStageWrapTap">
+      <StageToolRail
+        :stage-zoomed="stageZoomed"
+        :show-grid="showGrid"
+        :layer-drawer-open="showLayerDrawer"
+        :dragging="layerButtonMoving"
+        :collapsed="materialCollapsed"
+        :rail-style="layerButtonStyle"
+        @toggle-zoom="runRailAction(toggleStageZoom)"
+        @toggle-grid="runRailAction(toggleGrid)"
+        @fit-selection="runRailAction(fitSelection)"
+        @toggle-layers="onLayerButtonTap"
+        @touch-start="onLayerButtonTouchStart"
+        @touch-move="onLayerButtonTouchMove"
+        @touch-end="onLayerButtonTouchEnd"
+        @mouse-down="onLayerButtonMouseDown"
+      />
+      <view class="stage" :style="{ width: cw + 'px', height: ch + 'px' }" @tap.stop="onStageTap">
         <view
           class="window"
           :class="{ grid: showGrid }"
           :style="{ left: win.x + 'px', top: win.y + 'px', width: win.w + 'px', height: win.h + 'px' }"
         >
           <image
-            v-if="curBoard >= 0"
-            class="fill"
-            :src="boards[curBoard].src"
-            mode="aspectFill"
+            class="fill bag-back-fill"
+            :src="bags[curBag].back"
+            mode="scaleToFill"
+            :style="bagBackFillStyle"
           />
-          <view v-else class="fill empty-board" />
+          <view
+            v-if="hasBoardLayer"
+            class="layer board-edit-layer"
+            :class="{ selected: selectedId === BOARD_LAYER_ID, locked: boardLayer.locked }"
+            :style="layerStyle(boardLayer, -9)"
+            @tap.stop="onLayerTap(boardLayer)"
+            @touchstart.stop="onTouchStart($event, boardLayer)"
+            @touchmove.stop="onTouchMove($event, boardLayer)"
+            @touchend.stop="onTouchEnd"
+            @mousedown.stop="onMouseDown($event, boardLayer)"
+          >
+            <view
+              class="layer-inner board-layer-inner"
+              :style="boardLayerInnerStyle"
+            />
+          </view>
           <view
             v-for="(ly, i) in doc.layers"
             :key="ly.id"
@@ -60,216 +82,195 @@
         </view>
 
         <image class="bag-front" :src="bags[curBag].front" mode="scaleToFill" />
-        <view
-          v-if="selected && !materialCollapsed"
-          class="selection-overlay"
-          :style="selectedHandleStyle(selected)"
-          @tap.stop
-        >
-          <view class="layer-handle handle-copy" @tap.stop="duplicateLayer">
-            <image class="handle-icon" :src="copyHandleIcon" mode="aspectFit" />
-          </view>
-          <view class="layer-handle handle-delete" @tap.stop="removeLayer">
-            <image class="handle-icon" :src="deleteHandleIcon" mode="aspectFit" />
-          </view>
-          <view class="layer-handle handle-mirror" @tap.stop="mirrorLayer">
-            <image class="handle-icon" :src="mirrorHandleIcon" mode="aspectFit" />
-          </view>
-          <view
-            class="layer-handle handle-rotate"
-            @tap.stop
-            @touchstart.stop="onRotateHandleTouchStart($event, selected)"
-            @touchmove.stop="onRotateHandleTouchMove($event, selected)"
-            @touchend.stop="onRotateHandleTouchEnd"
-            @mousedown.stop="onRotateHandleMouseDown($event, selected)"
-          >
-            <image class="handle-icon" :src="rotateHandleIcon" mode="aspectFit" />
-          </view>
-        </view>
+        <SelectionOverlay
+          v-if="selected"
+          :selected="selected"
+          :dragging="layerDragging"
+          :overlay-style="selectedHandleStyle(selected)"
+          @duplicate="duplicateLayer"
+          @remove="removeLayer"
+          @mirror="mirrorLayer"
+          @rotate-touch-start="onRotateHandleTouchStart"
+          @rotate-touch-move="onRotateHandleTouchMove"
+          @rotate-touch-end="onRotateHandleTouchEnd"
+          @rotate-mouse-down="onRotateHandleMouseDown"
+        />
       </view>
 
-    </view>
-
-    <view
-      v-if="!materialCollapsed"
-      class="floating-layers"
-      :class="{ active: showLayerDrawer, dragging: layerButtonMoving }"
-      :style="layerButtonStyle"
-      @tap="onLayerButtonTap"
-      @touchstart.stop="onLayerButtonTouchStart"
-      @touchmove.stop="onLayerButtonTouchMove"
-      @touchend.stop="onLayerButtonTouchEnd"
-      @mousedown.stop="onLayerButtonMouseDown"
-      @dragstart.stop.prevent
-    >
-      <image class="floating-icon-img" :src="layerIcon" mode="aspectFit" :draggable="false" @dragstart.stop.prevent />
-      <text class="floating-count">{{ doc.layers.length }}</text>
     </view>
 
     <view class="bottom-dock" :class="{ collapsed: materialCollapsed, dragging: sheetDragging }">
-      <view v-if="selected && !materialCollapsed" class="inspector">
-        <view class="nudge-row">
-          <view class="nudge-group">
-            <view
-              class="nudge-btn zoom-btn"
-              @touchstart.stop.prevent="startStepHold(applyScaleStep, -1)"
-              @touchend.stop="stopStepHold"
-              @touchcancel.stop="stopStepHold"
-              @mousedown.stop="onStepMouseDown(applyScaleStep, -1)"
-            >⊖</view>
-            <input
-              class="nudge-input"
-              type="text"
-              :value="scaleFieldValue"
-              @focus="onNudgeFocus('scale')"
-              @input="onScaleInput"
-              @blur="commitNudgeInput"
-              @confirm="commitNudgeInput"
-            />
-            <view
-              class="nudge-btn zoom-btn"
-              @touchstart.stop.prevent="startStepHold(applyScaleStep, 1)"
-              @touchend.stop="stopStepHold"
-              @touchcancel.stop="stopStepHold"
-              @mousedown.stop="onStepMouseDown(applyScaleStep, 1)"
-            >⊕</view>
-          </view>
-          <view class="nudge-group">
-            <view
-              class="nudge-btn"
-              @touchstart.stop.prevent="startStepHold(applyRotateStep, -1)"
-              @touchend.stop="stopStepHold"
-              @touchcancel.stop="stopStepHold"
-              @mousedown.stop="onStepMouseDown(applyRotateStep, -1)"
-            >↺</view>
-            <input
-              class="nudge-input"
-              type="text"
-              :value="rotationFieldValue"
-              @focus="onNudgeFocus('rotation')"
-              @input="onRotationInput"
-              @blur="commitNudgeInput"
-              @confirm="commitNudgeInput"
-            />
-            <view
-              class="nudge-btn"
-              @touchstart.stop.prevent="startStepHold(applyRotateStep, 1)"
-              @touchend.stop="stopStepHold"
-              @touchcancel.stop="stopStepHold"
-              @mousedown.stop="onStepMouseDown(applyRotateStep, 1)"
-            >↻</view>
-          </view>
-        </view>
-      </view>
+      <NudgeInspector
+        :selected="selected"
+        :scale-field-value="scaleFieldValue"
+        :rotation-field-value="rotationFieldValue"
+        @scale-step-touch-start="(dir) => startStepHold(applyScaleStep, dir)"
+        @rotate-step-touch-start="(dir) => startStepHold(applyRotateStep, dir)"
+        @step-touch-end="stopStepHold"
+        @scale-step-mouse-down="(dir) => onStepMouseDown(applyScaleStep, dir)"
+        @rotate-step-mouse-down="(dir) => onStepMouseDown(applyRotateStep, dir)"
+        @nudge-focus="onNudgeFocus"
+        @scale-input="onScaleInput"
+        @rotation-input="onRotationInput"
+        @commit-input="commitNudgeInput"
+      />
 
-      <view class="panel material-panel" :style="materialPanelStyle">
-        <view
-          class="sheet-grabber"
-          @tap.stop="toggleMaterialCollapsed"
-          @touchstart.stop="onSheetTouchStart"
-          @touchmove.stop="onSheetTouchMove"
-          @touchend.stop="onSheetTouchEnd"
-          @mousedown.stop="onSheetMouseDown"
-        />
-        <view class="panel-head">
-          <view class="panel-title-wrap">
-            <text class="panel-title">素材选择</text>
-            <text class="sparkle">✦</text>
-          </view>
-          <view class="import-pill" @tap="chooseImageLayer">
-            <text class="import-icon">▧</text>
-            <text>导入图片</text>
-          </view>
-        </view>
-        <view class="cats">
-          <view
-            v-for="c in cats"
-            :key="c"
-            class="cat"
-            :class="{ on: category === c }"
-            @tap="category = c"
-          >{{ c }}</view>
-        </view>
-        <scroll-view :scroll-x="true" class="row">
-          <view class="row-inner">
-            <view v-for="(it, i) in rowItems" :key="i" class="cell" @tap="onItem(it)">
-              <view class="cell-card">
-                <view v-if="it.kind === 'none'" class="cell-none">
-                  <image class="cell-none-icon" :src="noneBoardIcon" mode="aspectFit" />
-                </view>
-                <image v-else-if="it.img" :src="it.img" class="cell-thumb" mode="aspectFill" />
-                <view v-else-if="it.color" class="cell-block" :class="it.shape" :style="{ background: it.color }">
-                  <text class="cell-heart">♥</text>
-                </view>
-                <view v-else class="cell-plus"><text>＋</text></view>
-              </view>
-              <text class="cell-label">{{ it.label }}</text>
-            </view>
-          </view>
-        </scroll-view>
+      <MaterialShelf
+        :panel-style="materialPanelStyle"
+        :cats="cats"
+        :category="category"
+        :sub-cats="subCats"
+        :sub-cat="subCat"
+        :row-items="rowItems"
+        @toggle-collapsed="toggleMaterialCollapsed"
+        @touch-start="onSheetTouchStart"
+        @touch-move="onSheetTouchMove"
+        @touch-end="onSheetTouchEnd"
+        @mouse-down="onSheetMouseDown"
+        @set-category="setCategory"
+        @set-subcat="subCat = $event"
+        @select-item="onItem"
+        @material-long-press="openMaterialAssetActions"
+        @material-drag-start="onMaterialDragStart"
+        @material-drag-move="onMaterialDragMove"
+        @material-drag-end="onMaterialDragEnd"
+      />
+    </view>
+
+    <view
+      v-if="materialDragGhost.visible"
+      class="material-drag-ghost"
+      :style="{
+        left: materialDragGhost.x + 'px',
+        top: materialDragGhost.y + 'px',
+        width: materialDragGhost.w + 'px',
+        height: materialDragGhost.h + 'px',
+      }"
+    >
+      <view
+        class="material-drag-piece"
+        :class="materialDragGhost.shape"
+        :style="{ background: materialDragGhost.color }"
+      >
+        <image v-if="materialDragGhost.src" :src="materialDragGhost.src" class="material-drag-img" mode="aspectFill" />
+        <text v-else class="material-drag-label">{{ materialDragGhost.label }}</text>
       </view>
     </view>
 
-    <view v-if="showLayerDrawer" class="drawer-mask" @tap="toggleLayerDrawer" />
-    <view
-      class="layer-drawer"
-      :class="{ open: showLayerDrawer, dragging: drawerDragging }"
-      :style="drawerStyle"
-    >
-      <view
-        class="drawer-handle"
-        @touchstart.stop="onDrawerTouchStart"
-        @touchmove.stop="onDrawerTouchMove"
-        @touchend.stop="onDrawerTouchEnd"
-        @mousedown.stop="onDrawerMouseDown"
-      />
-      <view class="panel-head drawer-head">
-        <text class="panel-title">图层</text>
-        <view class="drawer-actions">
-          <text class="panel-link">{{ doc.layers.length }} 个元素</text>
-          <text class="drawer-close" @tap="toggleLayerDrawer">×</text>
-        </view>
+    <LayerDrawer
+      :open="showLayerDrawer"
+      :dragging="drawerDragging"
+      :drawer-style="drawerStyle"
+      :layers="visibleLayerList"
+      :selected-id="selectedId"
+      :reorder-id="reorderId"
+      :reorder-target-vis="reorderTargetVis"
+      :settled-reorder-id="settledReorderId"
+      :layer-order-label="layerOrderLabel"
+      :layer-row-style="layerRowStyle"
+      @close="toggleLayerDrawer"
+      @touch-start="onDrawerTouchStart"
+      @touch-move="onDrawerTouchMove"
+      @touch-end="onDrawerTouchEnd"
+      @mouse-down="onDrawerMouseDown"
+      @select-layer="selectLayer"
+      @toggle-lock="toggleLayerLock"
+      @row-drag-touch-start="onRowDragTouchStart"
+      @row-drag-touch-move="onRowDragTouchMove"
+      @row-drag-touch-end="onRowDragTouchEnd"
+      @row-drag-mouse-down="onRowDragMouseDown"
+    />
+
+    <view v-if="materialAssetActionOpen" class="asset-action-mask" @tap="closeMaterialAssetActions">
+      <view class="asset-action-panel" @tap.stop>
+        <view class="asset-action-title">{{ materialAssetActionLabel }}</view>
+        <view class="asset-action-row" @tap="editMaterialAsset">编辑</view>
+        <view class="asset-action-row danger" @tap="deleteMaterialAsset">删除</view>
+        <view class="asset-action-cancel" @tap="closeMaterialAssetActions">取消</view>
       </view>
-      <view v-if="!doc.layers.length" class="empty-layers">
-        <text>还没有元素</text>
-      </view>
-      <scroll-view v-else :scroll-y="true" class="layer-scroll">
-        <view class="layer-list" :class="{ reordering: reorderId }">
-          <view
-            v-for="(ly, idx) in visibleLayerList"
-            :key="ly.id"
-            class="layer-slot"
-          >
-            <text class="layer-rank">{{ layerOrderLabel(idx) }}</text>
-            <view
-              class="layer-row"
-              :class="{ on: ly.id === selectedId, lifting: ly.id === reorderId, insert: idx === reorderTargetVis && ly.id !== reorderId, settled: ly.id === settledReorderId }"
-              :style="layerRowStyle(ly, idx)"
-              @tap="selectLayer(ly.id)"
-            >
-              <view
-                class="row-drag"
-                @tap.stop
-                @touchstart.stop="onRowDragTouchStart($event, ly, idx)"
-                @touchmove.stop="onRowDragTouchMove($event)"
-                @touchend.stop="onRowDragTouchEnd"
-                @mousedown.stop="onRowDragMouseDown($event, ly, idx)"
-              ><text class="row-drag-icon">≡</text></view>
-              <view class="layer-dot" :class="ly.shape" :style="{ background: ly.color }" />
-              <text class="layer-row-name">{{ ly.label }}</text>
-              <view class="row-lock" :class="{ on: ly.locked }" @tap.stop="toggleLayerLock(ly.id)">
-                <image class="row-lock-icon" :src="ly.locked ? lockStateIcon : unlockStateIcon" mode="aspectFit" />
-              </view>
-            </view>
-          </view>
-        </view>
-      </scroll-view>
     </view>
 
     <canvas type="2d" id="exportCanvas" class="export-canvas" />
-    <view v-if="resultSrc" class="result">
-      <text class="panel-title">导出结果</text>
-      <image :src="resultSrc" mode="widthFix" class="result-img" />
+    <view v-if="exportHistoryOpen" class="export-history-mask" @tap="closeExportHistory">
+      <view class="export-history-panel" @tap.stop>
+        <view class="export-history-head">
+          <view>
+            <text class="export-history-title">导出历史</text>
+            <text class="export-history-subtitle">最近 {{ exportHistory.length }} 张</text>
+          </view>
+          <text class="export-history-close" @tap="closeExportHistory">×</text>
+        </view>
+        <view v-if="exportHistory.length" class="export-history-list">
+          <view
+            v-for="record in exportHistory"
+            :key="record.id"
+            class="export-history-item"
+            @tap="previewExportHistory(record)"
+          >
+            <image :src="record.src" mode="aspectFill" class="export-history-thumb" />
+            <view class="export-history-meta">
+              <text class="export-history-name">{{ record.name }}</text>
+              <text class="export-history-time">{{ record.timeText }}</text>
+            </view>
+            <text class="export-history-arrow">查看</text>
+          </view>
+        </view>
+        <view v-else class="export-history-empty">
+          <text>还没有导出记录</text>
+        </view>
+      </view>
+    </view>
+    <view v-if="importEditorOpen" class="import-editor-mask" @tap="cancelImportEditor">
+      <view class="import-editor-panel" @tap.stop>
+        <view class="import-editor-head">
+          <view>
+            <text class="import-editor-title">编辑导入素材</text>
+            <text class="import-editor-subtitle">先归类，再放进谷子池</text>
+          </view>
+          <text class="import-editor-close" @tap="cancelImportEditor">×</text>
+        </view>
+        <view class="import-editor-body">
+          <image :src="importDraft.storedSrc || importDraft.src" mode="aspectFit" class="import-editor-preview" />
+          <view class="import-editor-field">
+            <text class="import-editor-label">名称</text>
+            <input
+              class="import-editor-input"
+              type="text"
+              maxlength="12"
+              :value="importDraft.label"
+              @input="onImportLabelInput"
+            />
+          </view>
+          <view class="import-editor-field">
+            <text class="import-editor-label">类型</text>
+            <view class="import-editor-types">
+              <view
+                v-for="item in importDraftSubcats"
+                :key="item"
+                class="import-editor-type"
+                :class="{ on: importDraft.sub === item }"
+                @tap="setImportDraftSub(item)"
+              >{{ item }}</view>
+            </view>
+          </view>
+        </view>
+        <view class="import-editor-actions">
+          <view class="import-editor-btn ghost" @tap="cancelImportEditor">取消</view>
+          <view class="import-editor-btn" @tap="confirmImportEditor">导入</view>
+        </view>
+      </view>
+    </view>
+    <view v-if="resultPreviewOpen && resultSrc" class="export-preview-mask" @tap="closeExportPreview">
+      <view class="export-preview" @tap.stop>
+        <view class="export-preview-head">
+          <text class="export-preview-title">导出结果</text>
+          <text class="export-preview-close" @tap="closeExportPreview">×</text>
+        </view>
+        <image :src="resultSrc" mode="aspectFit" class="export-preview-img" />
+        <view class="export-preview-actions">
+          <view class="export-save-btn" @tap="saveExportImage">保存图片</view>
+        </view>
+      </view>
     </view>
   </view>
 </template>
@@ -277,27 +278,33 @@
 <script setup lang="ts">
 import { reactive, ref, computed, onMounted } from 'vue'
 import Taro from '@tarojs/taro'
+import EditorTopbar from './components/EditorTopbar.vue'
+import StageToolRail from './components/StageToolRail.vue'
+import SelectionOverlay from './components/SelectionOverlay.vue'
+import NudgeInspector from './components/NudgeInspector.vue'
+import MaterialShelf from './components/MaterialShelf.vue'
+import LayerDrawer from './components/LayerDrawer.vue'
+import { exportEditorImage } from './editor-export'
 import {
-  STORAGE_KEY, STORAGE_VERSION, EXPORT_SIZE, BAG_RATIO, WIN, ROW_PITCH,
-  boards, bags, cats, guzi, decor,
-  clamp, dist, ang, roundRectPath, drawRoundedImage, loadImg,
+  STORAGE_KEY, STORAGE_VERSION, EXPORT_SIZE, BAG_RATIO, BOARD_LAYER_ID, WIN, ROW_PITCH,
+  boards, bags, cats, decor, SUBCATS,
+  clamp, dist, ang,
 } from './editor-core'
-import type { Mat, Layer, Snapshot, RowItem, CatName } from './editor-core'
-import layerIcon from '../../assets/layer-icon.png'
-import undoIcon from '../../assets/undo-icon.png'
-import redoIcon from '../../assets/redo-icon.png'
-import rotateHandleIcon from '../../assets/rotate-handle-icon.png'
-import copyHandleIcon from '../../assets/copy-handle-icon.png'
-import mirrorHandleIcon from '../../assets/mirror-handle-icon.png'
-import deleteHandleIcon from '../../assets/delete-handle-icon.png'
-import noneBoardIcon from '../../assets/none-board-icon.png'
-import brandLogo from '../../assets/brand-logo.png'
-import brandWordmark from '../../assets/brand-wordmark.png'
-import lockStateIcon from '../../assets/lock-state-locked.png'
-import unlockStateIcon from '../../assets/lock-state-unlocked.png'
+import type { Mat, Layer, Snapshot, RowItem, CatName, BoardTransform } from './editor-core'
+import appWaterBg from '../../assets/app-water-bg.jpg'
 
 const MIN_SCALE = 0.1
 const MAX_SCALE = 3
+const LAYER_LONG_PRESS_MS = 1600
+const MATERIAL_COLLAPSED_PEEK = 86
+const LAYER_RAIL_TOP_GUARD = 98
+const EXPORT_HISTORY_KEY = `${STORAGE_KEY}-export-history`
+const EXPORT_HISTORY_LIMIT = 8
+const EXPORT_HISTORY_DB_NAME = 'gooda-export-history'
+const EXPORT_HISTORY_STORE = 'exports'
+const USER_ASSETS_KEY = `${STORAGE_KEY}-user-assets`
+const USER_ASSETS_DB_NAME = 'gooda-user-assets'
+const USER_ASSETS_STORE = 'images'
 
 const sys = Taro.getSystemInfoSync()
 function viewportSize() {
@@ -305,29 +312,87 @@ function viewportSize() {
   return { w: sys.windowWidth || 375, h: sys.windowHeight || 760 }
 }
 const vp = viewportSize()
-const cw = Math.min(vp.w - 8, Math.floor((vp.h - 260) * 0.75), 400)
+const cw = Math.min(vp.w - 8, Math.floor((vp.h - 300) * 0.84), 430)
 const ch = Math.round(cw * BAG_RATIO)
-const win = {
+const win = reactive({
   x: WIN.l * cw, y: WIN.t * ch,
   w: (WIN.r - WIN.l) * cw, h: (WIN.b - WIN.t) * ch,
-}
+})
 
 const curBoard = ref(-1)
 const curBag = ref(0)
 const showGrid = ref(false)
+const stageZoomed = ref(false)
 const category = ref<CatName>('谷子')
+const subCat = ref('全部')
+const subCats = computed(() => SUBCATS[category.value] || ['全部'])
+function setCategory(c: CatName) {
+  category.value = c
+  subCat.value = '全部'
+  if (materialCollapsed.value) materialCollapsed.value = false
+}
 const doc = reactive<{ layers: Layer[] }>({ layers: [] })
 const selectedId = ref('')
 const resultSrc = ref('')
+const resultPreviewOpen = ref(false)
+const exportHistoryOpen = ref(false)
+const importEditorOpen = ref(false)
+const importDraft = reactive({
+  src: '',
+  storedSrc: '',
+  editAssetId: '',
+  type: '谷子' as '谷子' | '装饰',
+  sub: '其他',
+  label: '',
+})
+const importDraftSubcats = computed(() => (SUBCATS[importDraft.type] || ['全部']).filter((item) => item !== '全部'))
+type UserAsset = {
+  id: string
+  type: '谷子' | '装饰'
+  sub: string
+  label: string
+  color: string
+  w: number
+  h: number
+  shape: 'rect' | 'circle'
+  src: string
+  source: 'import' | 'spu'
+  spuId?: string
+  createdAt: number
+  updatedAt: number
+}
+type StoredUserAsset = Omit<UserAsset, 'src'> & { src?: string }
+type ExportHistoryRecord = { id: string; src: string; createdAt: number; name: string; timeText: string }
+type StoredExportHistoryRecord = Omit<ExportHistoryRecord, 'src'> & { src?: string }
+const userAssets = ref<UserAsset[]>([])
+const exportHistory = ref<ExportHistoryRecord[]>([])
+const materialAssetActionOpen = ref(false)
+const materialAssetActionId = ref('')
+const materialAssetActionLabel = computed(() => {
+  const asset = userAssets.value.find((item) => item.id === materialAssetActionId.value)
+  return asset?.label || '素材'
+})
 const history = ref<Snapshot[]>([])
 const redoStack = ref<Snapshot[]>([])
 const showLayerDrawer = ref(false)
 const layerButtonMoving = ref(false)
+const layerDragging = ref(false)
 const materialCollapsed = ref(false)
 const sheetDragging = ref(false)
 const sheetDragY = ref(0)
 const drawerDragging = ref(false)
 const drawerDragY = ref(0)
+const materialDragGhost = reactive({
+  visible: false,
+  x: 0,
+  y: 0,
+  w: 56,
+  h: 56,
+  color: '#fff',
+  label: '',
+  shape: 'rect',
+  src: '',
+})
 const layerButton = reactive({ x: 0, y: 0 })
 const reorderId = ref('')
 const editingField = ref<'' | 'scale' | 'rotation'>('')
@@ -336,18 +401,49 @@ const reorderTargetVis = ref(-1)
 const reorderOffsetY = ref(0)
 const reorderDragY = ref(0)
 const settledReorderId = ref('')
+const boardTransform = reactive<BoardTransform>({
+  x: win.w / 2,
+  y: win.h / 2,
+  scale: 1,
+  rotation: 0,
+  opacity: 1,
+  locked: true,
+  flipX: false,
+})
 
-const selected = computed(() => doc.layers.find((l) => l.id === selectedId.value))
+const boardLayer = reactive<Layer>({
+  type: '底板',
+  label: '底板',
+  color: '#fff',
+  w: win.w,
+  h: win.h,
+  shape: 'rect',
+  id: BOARD_LAYER_ID,
+  x: boardTransform.x,
+  y: boardTransform.y,
+  scale: boardTransform.scale,
+  rotation: boardTransform.rotation,
+  opacity: boardTransform.opacity,
+  locked: boardTransform.locked,
+  flipX: boardTransform.flipX,
+  fixed: true,
+})
+const hasBoardLayer = computed(() => curBoard.value >= 0)
+const selected = computed(() => selectedId.value === BOARD_LAYER_ID && hasBoardLayer.value ? boardLayer : doc.layers.find((l) => l.id === selectedId.value))
 const canUndo = computed(() => history.value.length > 1)
 const canRedo = computed(() => redoStack.value.length > 0)
-const visibleLayerList = computed(() => [...doc.layers].reverse())
+const visibleLayerList = computed(() => {
+  const list = [...doc.layers].reverse()
+  if (hasBoardLayer.value) list.push(boardLayer)
+  return list
+})
 const layerButtonStyle = computed(() => ({
-  transform: `translate3d(${layerButton.x}px, ${layerButton.y}px, 0)`,
+  transform: `translate3d(${materialCollapsed.value ? layerButtonHiddenX() : layerButton.x}px, ${layerButton.y}px, 0)`,
 }))
 const materialPanelStyle = computed(() => {
   if (!sheetDragging.value) return {}
   if (materialCollapsed.value) {
-    return { transform: `translateY(calc(100% - 34PX + ${sheetDragY.value}px))` }
+    return { transform: `translateY(calc(100% - ${MATERIAL_COLLAPSED_PEEK}PX + ${sheetDragY.value}px))` }
   }
   return { transform: `translateY(${sheetDragY.value}px)` }
 })
@@ -361,34 +457,228 @@ const scaleFieldValue = computed(() =>
 const rotationFieldValue = computed(() =>
   editingField.value === 'rotation' ? editingText.value : selected.value ? formatRotation(selected.value.rotation) : '',
 )
+function boardBaseSize() {
+  const aspect = curBoard.value >= 0 ? boards[curBoard.value].aspect || 426 / 300 : 426 / 300
+  return { w: win.h * aspect, h: win.h }
+}
+function boardCoverScale() {
+  const base = boardBaseSize()
+  return Math.max(win.w / base.w, win.h / base.h)
+}
+const boardLayerInnerStyle = computed(() => ({
+  background: boardLayer.src ? undefined : boardLayer.color,
+  backgroundImage: boardLayer.src ? `url(${boardLayer.src})` : undefined,
+  backgroundPosition: 'center',
+  backgroundRepeat: 'no-repeat',
+  backgroundSize: '100% 100%',
+  opacity: boardLayer.opacity,
+  transform: boardLayer.flipX ? 'scaleX(-1)' : 'none',
+}))
+const bagBackFillStyle = computed(() => {
+  const crop = bags[curBag.value]?.backCrop
+  if (!crop) return {}
+  const left = -(crop.x / crop.w) * 100
+  const top = -(crop.y / crop.h) * 100
+  const width = (EXPORT_SIZE / crop.w) * 100
+  const height = (EXPORT_SIZE / crop.h) * 100
+  return {
+    left: `${left}%`,
+    top: `${top}%`,
+    width: `${width}%`,
+    height: `${height}%`,
+  }
+})
+
+function syncWindowFromBag(rescaleContent = false) {
+  const old = { w: win.w, h: win.h }
+  const frame = bags[curBag.value]?.win || WIN
+  win.x = frame.l * cw
+  win.y = frame.t * ch
+  win.w = (frame.r - frame.l) * cw
+  win.h = (frame.b - frame.t) * ch
+  if (rescaleContent && old.w > 0 && old.h > 0) {
+    const rx = win.w / old.w
+    const ry = win.h / old.h
+    doc.layers.forEach((ly) => {
+      ly.x *= rx
+      ly.y *= ry
+    })
+    boardTransform.x *= rx
+    boardTransform.y *= ry
+  }
+}
+
+function syncBoardLayerFromTransform() {
+  if (curBoard.value >= 0) {
+    const b = boards[curBoard.value]
+    boardLayer.label = b.label || '底板'
+    boardLayer.color = b.color || '#fff'
+    boardLayer.src = b.src
+  } else {
+    boardLayer.label = '底板'
+    boardLayer.color = '#fff'
+    boardLayer.src = undefined
+  }
+  const base = boardBaseSize()
+  boardLayer.w = base.w
+  boardLayer.h = base.h
+  boardLayer.x = boardTransform.x
+  boardLayer.y = boardTransform.y
+  boardLayer.scale = boardTransform.scale
+  boardLayer.rotation = boardTransform.rotation
+  boardLayer.opacity = boardTransform.opacity
+  boardLayer.locked = boardTransform.locked
+  boardLayer.flipX = boardTransform.flipX
+}
+
+function syncBoardTransformFromLayer() {
+  boardTransform.x = boardLayer.x
+  boardTransform.y = boardLayer.y
+  boardTransform.scale = boardLayer.scale
+  boardTransform.rotation = boardLayer.rotation
+  boardTransform.opacity = boardLayer.opacity
+  boardTransform.locked = boardLayer.locked
+  boardTransform.flipX = boardLayer.flipX
+}
+
+function resetBoardTransform(locked = true) {
+  boardTransform.x = win.w / 2
+  boardTransform.y = win.h / 2
+  boardTransform.scale = boardCoverScale()
+  boardTransform.rotation = 0
+  boardTransform.opacity = 1
+  boardTransform.locked = locked
+  boardTransform.flipX = false
+  syncBoardLayerFromTransform()
+}
+
+function assetToMat(asset: UserAsset): Mat {
+  return {
+    type: asset.type,
+    label: asset.label,
+    color: asset.color,
+    w: asset.w,
+    h: asset.h,
+    shape: asset.shape,
+    src: asset.src,
+    assetId: asset.id,
+    sub: asset.sub,
+    spuId: asset.spuId,
+  }
+}
+
+function guessAssetShape(type: UserAsset['type'], sub: string) {
+  return type === '谷子' && sub === '吧唧' ? 'circle' : 'rect'
+}
+function defaultAssetSize(sub: string, shape: 'rect' | 'circle') {
+  if (shape === 'circle') return { w: 56, h: 56 }
+  if (sub === '立牌') return { w: 48, h: 70 }
+  if (sub === '小卡') return { w: 48, h: 66 }
+  if (sub === '色纸') return { w: 60, h: 60 }
+  return { w: 60, h: 60 }
+}
+function categorySubcats(type: UserAsset['type']) {
+  return (SUBCATS[type] || ['全部']).filter((item) => item !== '全部')
+}
+function placeholderColor(type: UserAsset['type'], sub: string) {
+  const guziColors: Record<string, string> = {
+    吧唧: '#E9C7CF',
+    立牌: '#BCDAD1',
+    小卡: '#E8D2B2',
+    色纸: '#C7DCE8',
+    其他: '#D8CFEA',
+  }
+  const decorColors: Record<string, string> = {
+    蝴蝶结: '#EBC4CC',
+    吧唧托: '#D7CEE9',
+    花边: '#EFE0BC',
+    丝带: '#C7DAE8',
+    其他: '#CFE0D7',
+  }
+  return type === '谷子' ? guziColors[sub] || '#E7D4DA' : decorColors[sub] || '#E3D9EC'
+}
+function categoryPlaceholder(type: UserAsset['type'], sub: string): RowItem | undefined {
+  if (sub === '全部') return undefined
+  const shape = guessAssetShape(type, sub)
+  const size = defaultAssetSize(sub, shape)
+  const mat: Mat = {
+    type,
+    label: sub,
+    color: placeholderColor(type, sub),
+    w: size.w,
+    h: size.h,
+    shape,
+    sub,
+  }
+  return { kind: 'mat', label: sub, color: mat.color, shape: mat.shape, mat }
+}
 
 const rowItems = computed<RowItem[]>(() => {
+  const sc = subCat.value
+  const flt = (arr: Mat[]) => (sc === '全部' ? arr : arr.filter((m) => (m.sub || '其他') === sc))
+  const fltAssets = (type: UserAsset['type']) => userAssets.value.filter((asset) => asset.type === type && (sc === '全部' || (asset.sub || '其他') === sc))
+  const placeholders = (type: UserAsset['type']) => {
+    const subs = sc === '全部' ? categorySubcats(type) : [sc]
+    return subs
+      .map((sub) => categoryPlaceholder(type, sub))
+      .filter((item): item is RowItem => !!item)
+  }
   if (category.value === '谷子')
-    return [...guzi.map((m) => ({ kind: 'mat', label: m.label, color: m.color, shape: m.shape, mat: m } as RowItem)), { kind: 'plus', label: '导入' }]
+    return [
+      { kind: 'plus', label: '导入' },
+      ...placeholders('谷子'),
+      ...fltAssets('谷子').map((asset) => {
+        const mat = assetToMat(asset)
+        return { kind: 'mat', label: mat.label, color: mat.color, shape: mat.shape, img: mat.src, mat } as RowItem
+      }),
+    ]
   if (category.value === '装饰')
-    return [...decor.map((m) => ({ kind: 'mat', label: m.label, color: m.color, shape: m.shape, mat: m } as RowItem)), { kind: 'plus', label: '导入' }]
+    return [
+      { kind: 'plus', label: '导入' },
+      ...placeholders('装饰'),
+      ...fltAssets('装饰').map((asset) => {
+        const mat = assetToMat(asset)
+        return { kind: 'mat', label: mat.label, color: mat.color, shape: mat.shape, img: mat.src, mat } as RowItem
+      }),
+      ...flt(decor).map((m) => ({ kind: 'mat', label: m.label, color: m.color, shape: m.shape, mat: m } as RowItem)),
+    ]
   if (category.value === '底板')
-    return [{ kind: 'none', label: '无底板' } as RowItem, ...boards.map((b, i) => ({ kind: 'board', label: b.label, img: b.src, idx: i } as RowItem))]
-  return bags.map((b, i) => ({ kind: 'bag', label: b.label, img: b.front, idx: i } as RowItem))
+    return [
+      { kind: 'none', label: '无底板' } as RowItem,
+      ...boards
+        .map((b, i) => ({ b, i }))
+        .filter(({ b }) => sc === '全部' || (b.sub || '其他') === sc)
+        .map(({ b, i }) => ({ kind: 'board', label: b.label, img: b.src, color: b.color, idx: i } as RowItem)),
+    ]
+  return bags.map((b, i) => ({ kind: 'bag', label: b.label, img: b.preview || b.front, idx: i } as RowItem))
 })
 
 let seq = 0
 let lastLayerTs = 0
+let lastBackgroundTapTs = 0
+let lastBackgroundTapHadSelection = false
 let dragged = false
 let layerButtonSuppressTap = false
 let suppressHistory = false
 let g = { id: '', mode: '' as '' | 'move' | 'pinch', sx: 0, sy: 0, lx: 0, ly: 0, sd: 0, sa: 0, ss: 1, sr: 0 }
 let bg = { sx: 0, sy: 0, x: 0, y: 0, moved: false }
-let rg = { id: '', cx: 0, cy: 0, corner: 0, moved: false }
+let rg = { id: '', cx: 0, cy: 0, startDist: 1, startAngle: 0, startScale: 1, startRotation: 0, moved: false }
 let sg = { sy: 0, moved: false }
 let dg = { sy: 0, moved: false }
 let sheetSuppressTap = false
 let nudgeInputDirty = false
 let lr = { id: '', fromVis: 0, startY: 0, base: [] as string[], active: false, moved: false }
+let layerLongPressTimer: any = 0
+let layerLongPress = { id: '', sx: 0, sy: 0, fired: false }
+const lockedDragFailures = new Map<string, number>()
 
-onMounted(() => {
+onMounted(async () => {
   resetLayerButton()
+  syncWindowFromBag()
+  syncBoardLayerFromTransform()
+  await loadUserAssets()
   loadWork()
+  loadExportHistory()
   pushHistory()
 })
 
@@ -396,15 +686,46 @@ function cloneLayers() {
   return doc.layers.map((l) => ({ ...l }))
 }
 function snapshot(): Snapshot {
-  return { layers: cloneLayers(), curBoard: curBoard.value, curBag: curBag.value, showGrid: showGrid.value }
+  syncBoardTransformFromLayer()
+  return {
+    layers: cloneLayers(),
+    curBoard: curBoard.value,
+    curBag: curBag.value,
+    showGrid: showGrid.value,
+    boardTransform: { ...boardTransform },
+  }
+}
+function storageSnapshot() {
+  const s = snapshot()
+  return {
+    ...s,
+    layers: s.layers.map((layer) => {
+      const next = { ...layer }
+      if (next.assetId) delete next.src
+      return next
+    }),
+  }
 }
 function applySnapshot(s: Snapshot) {
   suppressHistory = true
-  doc.layers = s.layers.map((l) => ({ ...l }))
+  doc.layers = hydrateLayerAssetSources(s.layers.map((l) => ({ ...l })))
   curBoard.value = s.curBoard
   curBag.value = s.curBag
   showGrid.value = s.showGrid
-  if (selectedId.value && !doc.layers.find((l) => l.id === selectedId.value)) selectedId.value = ''
+  syncWindowFromBag()
+  Object.assign(boardTransform, s.boardTransform || {
+    x: win.w / 2,
+    y: win.h / 2,
+    scale: boardCoverScale(),
+    rotation: 0,
+    opacity: 1,
+    locked: true,
+    flipX: false,
+  })
+  syncBoardLayerFromTransform()
+  if (selectedId.value === BOARD_LAYER_ID) {
+    if (curBoard.value < 0) selectedId.value = ''
+  } else if (selectedId.value && !doc.layers.find((l) => l.id === selectedId.value)) selectedId.value = ''
   suppressHistory = false
 }
 function pushHistory() {
@@ -433,7 +754,48 @@ function redo() {
 
 function markLayer() { lastLayerTs = Date.now() }
 function onLayerTap(ly: Layer) { selectedId.value = ly.id; markLayer() }
-function onStageTap() { if (Date.now() - lastLayerTs < 350) return; selectedId.value = '' }
+function collapseMaterialDrawer() {
+  if (!materialCollapsed.value) materialCollapsed.value = true
+  showLayerDrawer.value = false
+}
+function expandMaterialDrawer() {
+  if (materialCollapsed.value) materialCollapsed.value = false
+  showLayerDrawer.value = false
+}
+function onBackgroundTap() {
+  const now = Date.now()
+  const hadSelection = !!selected.value
+  const isDoubleTap = now - lastBackgroundTapTs < 320
+  const previousHadSelection = lastBackgroundTapHadSelection
+  lastBackgroundTapTs = now
+  lastBackgroundTapHadSelection = hadSelection
+
+  if (materialCollapsed.value) {
+    if (hadSelection) {
+      selectedId.value = ''
+      return
+    }
+    expandMaterialDrawer()
+    return
+  }
+  if (hadSelection) {
+    selectedId.value = ''
+    if (isDoubleTap) collapseMaterialDrawer()
+    return
+  }
+  if (isDoubleTap && previousHadSelection) {
+    collapseMaterialDrawer()
+    return
+  }
+  collapseMaterialDrawer()
+}
+function onStageTap() {
+  if (Date.now() - lastLayerTs < 350) return
+  onBackgroundTap()
+}
+function onStageWrapTap() {
+  onBackgroundTap()
+}
 function clearSelection() { selectedId.value = '' }
 function selectLayer(id: string) { selectedId.value = id; markLayer() }
 function toggleLayerDrawer() { showLayerDrawer.value = !showLayerDrawer.value }
@@ -444,7 +806,14 @@ function onLayerButtonTap() {
   }
   toggleLayerDrawer()
 }
-function layerOrderLabel(idx: number) { return String(doc.layers.length - idx) }
+function runRailAction(action: () => void) {
+  if (layerButtonSuppressTap) {
+    layerButtonSuppressTap = false
+    return
+  }
+  action()
+}
+function layerOrderLabel(idx: number) { return String(visibleLayerList.value.length - idx) }
 function boundedScale(v: number) {
   return Number.isFinite(v) ? clamp(v, MIN_SCALE, MAX_SCALE) : 1
 }
@@ -463,18 +832,30 @@ function formatRotation(v: number) {
   return `${displayRotation(v)}°`
 }
 function resetLayerButton() {
-  const { w: ww, h: wh } = viewportSize()
-  layerButton.x = ww - 64
-  layerButton.y = clamp(wh - 480, 82, wh - 74)
+  const { h: wh } = viewportSize()
+  const railH = 188
+  const topMin = layerButtonTopMin()
+  const topLimit = Math.max(topMin, wh - railH - 330)
+  layerButton.x = 14
+  layerButton.y = clamp(92, topMin, topLimit)
+}
+function layerButtonTopMin() {
+  return Math.max(LAYER_RAIL_TOP_GUARD, (sys.statusBarHeight || 0) + 66)
+}
+function layerButtonHiddenX() {
+  const { w: ww } = viewportSize()
+  return layerButton.x + 25 < ww / 2 ? -68 : ww + 18
 }
 function clampLayerButton() {
   const { w: ww, h: wh } = viewportSize()
-  layerButton.x = clamp(layerButton.x, 10, ww - 58)
-  layerButton.y = clamp(layerButton.y, 72, wh - 64)
+  const railH = 188
+  const topMin = layerButtonTopMin()
+  layerButton.x = clamp(layerButton.x, 10, ww - 60)
+  layerButton.y = clamp(layerButton.y, topMin, wh - railH - 28)
 }
 function snapLayerButton() {
   const { w: ww } = viewportSize()
-  layerButton.x = layerButton.x + 24 < ww / 2 ? 10 : ww - 58
+  layerButton.x = layerButton.x + 25 < ww / 2 ? 14 : ww - 64
   clampLayerButton()
 }
 function startLayerButtonDrag(x: number, y: number) {
@@ -536,6 +917,7 @@ function toggleMaterialCollapsed() {
     return
   }
   materialCollapsed.value = !materialCollapsed.value
+  if (materialCollapsed.value) showLayerDrawer.value = false
 }
 function suppressNextSheetTap() {
   sheetSuppressTap = true
@@ -556,7 +938,10 @@ function endSheetDrag(y?: number) {
   const dy = typeof y === 'number' ? y - sg.sy : 0
   if (sg.moved) {
     suppressNextSheetTap()
-    if (dy > 18) materialCollapsed.value = true
+    if (dy > 18) {
+      materialCollapsed.value = true
+      showLayerDrawer.value = false
+    }
     else if (dy < -18) materialCollapsed.value = false
   }
   sheetDragging.value = false
@@ -651,13 +1036,13 @@ function onDrawerMouseDown(e: any) {
 }
 
 function nextId() { return 'L' + ++seq }
-function addLayer(m: Mat) {
+function addLayer(m: Mat, position?: { x: number; y: number }) {
   const id = nextId()
   doc.layers.push({
     ...m,
     id,
-    x: win.w / 2,
-    y: win.h / 2,
+    x: position?.x ?? win.w / 2,
+    y: position?.y ?? win.h / 2,
     scale: 1,
     rotation: 0,
     opacity: 1,
@@ -667,14 +1052,115 @@ function addLayer(m: Mat) {
   selectedId.value = id
   commit()
 }
+function clientPointToWindowPoint(clientX: number, clientY: number) {
+  if (typeof document === 'undefined') return undefined
+  const stage = document.querySelector('.stage')
+  if (!stage) return undefined
+  const rect = stage.getBoundingClientRect()
+  const scaleX = cw / rect.width
+  const scaleY = ch / rect.height
+  const x = (clientX - rect.left) * scaleX - win.x
+  const y = (clientY - rect.top) * scaleY - win.y
+  if (x < 0 || x > win.w || y < 0 || y > win.h) return undefined
+  return { x, y }
+}
 function onItem(it: RowItem) {
   if (it.kind === 'mat') addLayer(it.mat)
   else if (it.kind === 'plus') chooseImageLayer()
-  else if (it.kind === 'none') { curBoard.value = -1; commit() }
-  else if (it.kind === 'board') { curBoard.value = it.idx; commit() }
-  else if (it.kind === 'bag') { curBag.value = it.idx; commit() }
+  else if (it.kind === 'none') {
+    curBoard.value = -1
+    if (selectedId.value === BOARD_LAYER_ID) selectedId.value = ''
+    syncBoardLayerFromTransform()
+    commit()
+  }
+  else if (it.kind === 'board') {
+    curBoard.value = it.idx
+    resetBoardTransform(true)
+    selectedId.value = BOARD_LAYER_ID
+    commit()
+  }
+  else if (it.kind === 'bag') {
+    syncBoardTransformFromLayer()
+    curBag.value = it.idx
+    syncWindowFromBag(true)
+    if (curBoard.value >= 0) resetBoardTransform(true)
+    syncBoardLayerFromTransform()
+    commit()
+  }
+}
+function updateMaterialDragGhost(it: RowItem, clientX: number, clientY: number, visible = true) {
+  if (it.kind !== 'mat') return
+  materialDragGhost.visible = visible
+  materialDragGhost.x = clientX
+  materialDragGhost.y = clientY
+  materialDragGhost.w = it.mat.w
+  materialDragGhost.h = it.mat.h
+  materialDragGhost.color = it.mat.color
+  materialDragGhost.label = it.mat.label
+  materialDragGhost.shape = it.mat.shape
+  materialDragGhost.src = it.mat.src || ''
+}
+function onMaterialDragStart(it: RowItem, clientX: number, clientY: number) {
+  updateMaterialDragGhost(it, clientX, clientY, true)
+}
+function onMaterialDragMove(it: RowItem, clientX: number, clientY: number) {
+  updateMaterialDragGhost(it, clientX, clientY, true)
+}
+function onMaterialDragEnd(it: RowItem, clientX: number, clientY: number, moved: boolean) {
+  materialDragGhost.visible = false
+  if (!moved || it.kind !== 'mat') return
+  const point = clientPointToWindowPoint(clientX, clientY)
+  if (!point) return
+  addLayer(it.mat, point)
+}
+function closeMaterialAssetActions() {
+  materialAssetActionOpen.value = false
+  materialAssetActionId.value = ''
+}
+function openMaterialAssetActions(it: RowItem) {
+  if (it.kind !== 'mat' || it.mat.type !== '谷子' || !it.mat.assetId) return
+  materialDragGhost.visible = false
+  materialAssetActionId.value = it.mat.assetId
+  materialAssetActionOpen.value = true
+}
+function editMaterialAsset() {
+  const asset = userAssets.value.find((item) => item.id === materialAssetActionId.value)
+  closeMaterialAssetActions()
+  if (!asset) return
+  openImportEditorFromAsset(asset)
+}
+function deleteMaterialAsset() {
+  const id = materialAssetActionId.value
+  const asset = userAssets.value.find((item) => item.id === id)
+  closeMaterialAssetActions()
+  if (!asset) {
+    return
+  }
+  Taro.showModal({
+    title: '删除素材',
+    content: `确定删除「${asset.label}」吗？画布中使用它的图层也会移除。`,
+    confirmText: '删除',
+    confirmColor: '#d14343',
+    success: async (res) => {
+      if (!res.confirm) return
+      userAssets.value = userAssets.value.filter((item) => item.id !== id)
+      doc.layers = doc.layers.filter((layer) => layer.assetId !== id)
+      if (selected.value?.assetId === id) selectedId.value = ''
+      await deleteUserAssetSource(id)
+      await persistUserAssets()
+      commit()
+      Taro.showToast({ title: '已删除', icon: 'none' })
+    },
+  })
 }
 function removeLayer() {
+  if (selectedId.value === BOARD_LAYER_ID) {
+    curBoard.value = -1
+    selectedId.value = ''
+    syncBoardLayerFromTransform()
+    commit()
+    return
+  }
   doc.layers = doc.layers.filter((l) => l.id !== selectedId.value)
   selectedId.value = ''
   commit()
@@ -682,6 +1168,10 @@ function removeLayer() {
 function duplicateLayer() {
   const l = selected.value
   if (!l) return
+  if (l.id === BOARD_LAYER_ID) {
+    Taro.showToast({ title: '底板不可复制', icon: 'none' })
+    return
+  }
   const copy = { ...l, id: nextId(), x: clamp(l.x + 16, 0, win.w), y: clamp(l.y + 16, 0, win.h), locked: false }
   doc.layers.push(copy)
   selectedId.value = copy.id
@@ -708,8 +1198,49 @@ function lockedToast() {
   lastLockToast = now
   Taro.showToast({ title: '图层已锁定', icon: 'none' })
 }
+function openLayerDrawerForUnlock(ly: Layer) {
+  selectedId.value = ly.id
+  markLayer()
+  showLayerDrawer.value = true
+  Taro.showToast({ title: '在图层面板解锁', icon: 'none' })
+}
+function recordLockedDragAttempt(ly: Layer) {
+  const count = (lockedDragFailures.get(ly.id) || 0) + 1
+  if (count >= 3) {
+    lockedDragFailures.set(ly.id, 0)
+    openLayerDrawerForUnlock(ly)
+    return
+  }
+  lockedDragFailures.set(ly.id, count)
+  lockedToast()
+}
+function clearLayerLongPress() {
+  if (layerLongPressTimer) {
+    clearTimeout(layerLongPressTimer)
+    layerLongPressTimer = 0
+  }
+}
+function startLayerLongPress(ly: Layer, x: number, y: number) {
+  clearLayerLongPress()
+  layerLongPress = { id: ly.id, sx: x, sy: y, fired: false }
+  layerLongPressTimer = setTimeout(() => {
+    if (layerLongPress.id !== ly.id) return
+    layerLongPress.fired = true
+    selectedId.value = ly.id
+    markLayer()
+    showLayerDrawer.value = true
+  }, LAYER_LONG_PRESS_MS)
+}
+function cancelLayerLongPressIfMoved(x: number, y: number) {
+  if (!layerLongPress.id || layerLongPress.fired) return
+  if (Math.abs(x - layerLongPress.sx) + Math.abs(y - layerLongPress.sy) > 8) clearLayerLongPress()
+}
+function finishLayerLongPress() {
+  clearLayerLongPress()
+  layerLongPress.id = ''
+}
 const SCALE_STEP = 0.05
-const ROTATE_STEP = 6
+const ROTATE_STEP = 1
 function applyScaleStep(dir: number) {
   const l = selected.value
   if (!l) return false
@@ -794,24 +1325,31 @@ function startRotateHandle(x: number, y: number, ly: Layer) {
   if (ly.locked) { selectedId.value = ly.id; markLayer(); lockedToast(); return }
   selectedId.value = ly.id
   markLayer()
-  // 以图层中心为锚，让被拖的右下角跟随手指（方向符合直觉）
-  const halfW = (ly.w * ly.scale) / 2
-  const halfH = (ly.h * ly.scale) / 2
-  const rCorner = Math.hypot(halfW, halfH)
-  const corner = Math.atan2(halfH, halfW)
-  const theta = (ly.rotation * Math.PI) / 180 + corner
+  const stage = typeof document !== 'undefined' ? document.querySelector('.stage') : undefined
+  const rect = stage?.getBoundingClientRect()
+  const cx = rect ? rect.left + ((win.x + ly.x) / cw) * rect.width : x
+  const cy = rect ? rect.top + ((win.y + ly.y) / ch) * rect.height : y
+  const dx = x - cx
+  const dy = y - cy
   rg = {
     id: ly.id,
-    cx: x - rCorner * Math.cos(theta),
-    cy: y - rCorner * Math.sin(theta),
-    corner,
+    cx,
+    cy,
+    startDist: Math.max(1, Math.hypot(dx, dy)),
+    startAngle: Math.atan2(dy, dx),
+    startScale: ly.scale,
+    startRotation: ly.rotation,
     moved: false,
   }
 }
 function moveRotateHandle(x: number, y: number, ly: Layer) {
   if (rg.id !== ly.id || ly.locked) return
-  const a = Math.atan2(y - rg.cy, x - rg.cx)
-  ly.rotation = normalizeRotation(((a - rg.corner) * 180) / Math.PI)
+  const dx = x - rg.cx
+  const dy = y - rg.cy
+  const distRatio = Math.hypot(dx, dy) / rg.startDist
+  const angleDelta = Math.atan2(dy, dx) - rg.startAngle
+  ly.scale = boundedScale(rg.startScale * distRatio)
+  ly.rotation = normalizeRotation(rg.startRotation + (angleDelta * 180) / Math.PI)
   rg.moved = true
   clampLayer(ly)
 }
@@ -854,13 +1392,22 @@ function toggleLock() {
   commit()
 }
 function toggleLayerLock(id: string) {
+  if (id === BOARD_LAYER_ID) {
+    boardLayer.locked = !boardLayer.locked
+    syncBoardTransformFromLayer()
+    if (!boardLayer.locked) lockedDragFailures.delete(id)
+    commit()
+    return
+  }
   const l = doc.layers.find((x) => x.id === id)
   if (!l) return
   l.locked = !l.locked
+  if (!l.locked) lockedDragFailures.delete(id)
   commit()
 }
 function startReorder(id: string, visIdx: number, y: number) {
-  lr = { id, fromVis: visIdx, startY: y, base: visibleLayerList.value.map((l) => l.id), active: true, moved: false }
+  if (id === BOARD_LAYER_ID) return
+  lr = { id, fromVis: visIdx, startY: y, base: visibleLayerList.value.filter((l) => !l.fixed).map((l) => l.id), active: true, moved: false }
   reorderId.value = id
   reorderTargetVis.value = visIdx
   reorderOffsetY.value = 0
@@ -942,8 +1489,9 @@ function centerLayer() {
 }
 function fitSelection() { centerLayer() }
 function toggleGrid() { showGrid.value = !showGrid.value; commit() }
+function toggleStageZoom() { stageZoomed.value = !stageZoomed.value }
 function clampLayer(ly: Layer) {
-  const pad = 6
+  const visiblePad = Math.min(28, Math.max(14, Math.min(win.w, win.h) * 0.16))
   // 旋转感知：用旋转后包围盒的半宽高
   const rad = (ly.rotation * Math.PI) / 180
   const c = Math.abs(Math.cos(rad))
@@ -952,10 +1500,10 @@ function clampLayer(ly: Layer) {
   const h = ly.h * ly.scale
   const halfW = (w * c + h * s) / 2
   const halfH = (w * s + h * c) / 2
-  const minX = halfW + pad
-  const maxX = win.w - halfW - pad
-  const minY = halfH + pad
-  const maxY = win.h - halfH - pad
+  const minX = -halfW + visiblePad
+  const maxX = win.w + halfW - visiblePad
+  const minY = -halfH + visiblePad
+  const maxY = win.h + halfH - visiblePad
   ly.x = minX <= maxX ? clamp(ly.x, minX, maxX) : win.w / 2
   ly.y = minY <= maxY ? clamp(ly.y, minY, maxY) : win.h / 2
 }
@@ -985,7 +1533,7 @@ function selectedHandleStyle(ly: Layer) {
     top: win.y + ly.y + 'px',
     width: ly.w + 'px',
     height: ly.h + 'px',
-    '--handle-rotation': `${-ly.rotation}deg`,
+    '--handle-rotation': '0deg',
     '--handle-scale': `${1 / ly.scale}`,
     transform: `translate(-50%,-50%) rotate(${ly.rotation}deg) scale(${ly.scale})`,
   }
@@ -994,17 +1542,21 @@ function selectedHandleStyle(ly: Layer) {
 function onTouchStart(e: any, ly: Layer) {
   selectedId.value = ly.id
   markLayer()
-  if (ly.locked) { lockedToast(); return }
-  dragged = false
   const t = e.touches || []
+  if (t.length) startLayerLongPress(ly, t[0].clientX, t[0].clientY)
+  if (ly.locked) { recordLockedDragAttempt(ly); return }
+  dragged = false
+  layerDragging.value = false
   if (t.length >= 2) g = { id: ly.id, mode: 'pinch', sx: 0, sy: 0, lx: 0, ly: 0, sd: dist(t[0], t[1]), sa: ang(t[0], t[1]), ss: ly.scale, sr: ly.rotation }
   else if (t.length) g = { id: ly.id, mode: 'move', sx: t[0].clientX, sy: t[0].clientY, lx: ly.x, ly: ly.y, sd: 0, sa: 0, ss: 1, sr: 0 }
 }
 function onTouchMove(e: any, ly: Layer) {
+  const t = e.touches || []
+  if (t.length) cancelLayerLongPressIfMoved(t[0].clientX, t[0].clientY)
   if (g.id !== ly.id || ly.locked) return
   if (e.preventDefault) e.preventDefault()
   dragged = true
-  const t = e.touches || []
+  layerDragging.value = true
   if (g.mode === 'pinch' && t.length >= 2) {
     ly.scale = boundedScale(g.ss * (dist(t[0], t[1]) / g.sd))
     ly.rotation = normalizeRotation(g.sr + (ang(t[0], t[1]) - g.sa))
@@ -1016,18 +1568,31 @@ function onTouchMove(e: any, ly: Layer) {
   }
 }
 function onTouchEnd() {
+  finishLayerLongPress()
   if (dragged) commit()
   dragged = false
+  layerDragging.value = false
   g.mode = ''
 }
 function onMouseDown(e: any, ly: Layer) {
   selectedId.value = ly.id
   markLayer()
-  if (ly.locked) { lockedToast(); return }
+  startLayerLongPress(ly, e.clientX, e.clientY)
+  if (ly.locked) {
+    recordLockedDragAttempt(ly)
+    const clearLockedPress = () => {
+      if (typeof window !== 'undefined') window.removeEventListener('mouseup', clearLockedPress)
+      finishLayerLongPress()
+    }
+    if (typeof window !== 'undefined') window.addEventListener('mouseup', clearLockedPress)
+    return
+  }
   const sx = e.clientX, sy = e.clientY, lx = ly.x, lyy = ly.y
   let moved = false
   const move = (ev: any) => {
+    cancelLayerLongPressIfMoved(ev.clientX, ev.clientY)
     moved = true
+    layerDragging.value = true
     ly.x = lx + (ev.clientX - sx)
     ly.y = lyy + (ev.clientY - sy)
     clampLayer(ly)
@@ -1037,7 +1602,9 @@ function onMouseDown(e: any, ly: Layer) {
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
     }
+    finishLayerLongPress()
     if (moved) commit()
+    layerDragging.value = false
   }
   if (typeof window !== 'undefined') {
     window.addEventListener('mousemove', move)
@@ -1045,22 +1612,296 @@ function onMouseDown(e: any, ly: Layer) {
   }
 }
 
+function canUseUserAssetsDb() {
+  return process.env.TARO_ENV === 'h5' && typeof indexedDB !== 'undefined'
+}
+function openUserAssetsDb(): Promise<IDBDatabase | undefined> {
+  if (!canUseUserAssetsDb()) return Promise.resolve(undefined)
+  return new Promise((resolve) => {
+    const req = indexedDB.open(USER_ASSETS_DB_NAME, 1)
+    req.onupgradeneeded = () => {
+      const db = req.result
+      if (!db.objectStoreNames.contains(USER_ASSETS_STORE)) db.createObjectStore(USER_ASSETS_STORE)
+    }
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => resolve(undefined)
+  })
+}
+async function putUserAssetSource(id: string, src: string) {
+  const db = await openUserAssetsDb()
+  if (!db) return false
+  return new Promise<boolean>((resolve) => {
+    const tx = db.transaction(USER_ASSETS_STORE, 'readwrite')
+    tx.objectStore(USER_ASSETS_STORE).put(src, id)
+    tx.oncomplete = () => { db.close(); resolve(true) }
+    tx.onerror = () => { db.close(); resolve(false) }
+  })
+}
+async function getUserAssetSource(id: string) {
+  const db = await openUserAssetsDb()
+  if (!db) return ''
+  return new Promise<string>((resolve) => {
+    const tx = db.transaction(USER_ASSETS_STORE, 'readonly')
+    const req = tx.objectStore(USER_ASSETS_STORE).get(id)
+    req.onsuccess = () => resolve(typeof req.result === 'string' ? req.result : '')
+    req.onerror = () => resolve('')
+    tx.oncomplete = () => db.close()
+    tx.onerror = () => db.close()
+  })
+}
+async function deleteUserAssetSource(id: string) {
+  const db = await openUserAssetsDb()
+  if (!db) return
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction(USER_ASSETS_STORE, 'readwrite')
+    tx.objectStore(USER_ASSETS_STORE).delete(id)
+    tx.oncomplete = () => { db.close(); resolve() }
+    tx.onerror = () => { db.close(); resolve() }
+  })
+}
+function hydrateLayerAssetSources(layers: Layer[]) {
+  return layers.map((layer) => {
+    if (!layer.assetId || layer.src) return layer
+    const asset = userAssets.value.find((item) => item.id === layer.assetId)
+    return asset?.src ? { ...layer, src: asset.src } : layer
+  })
+}
+async function imageSourceToDataUrl(src: string) {
+  if (src.startsWith('data:')) return src
+  if (typeof fetch === 'undefined' || typeof FileReader === 'undefined') return src
+  try {
+    const res = await fetch(src)
+    const blob = await res.blob()
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result || src))
+      reader.onerror = reject
+      reader.readAsDataURL(blob)
+    })
+  } catch (_) {
+    if (typeof document === 'undefined') return src
+    return await new Promise<string>((resolve) => {
+      const img = new Image()
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas')
+          canvas.width = img.naturalWidth || img.width
+          canvas.height = img.naturalHeight || img.height
+          const ctx = canvas.getContext('2d')
+          if (!ctx) { resolve(src); return }
+          ctx.drawImage(img, 0, 0)
+          resolve(canvas.toDataURL('image/png'))
+        } catch (_) {
+          resolve(src)
+        }
+      }
+      img.onerror = () => resolve(src)
+      img.src = src
+    })
+  }
+}
+async function persistUserAssets() {
+  const useDb = canUseUserAssetsDb()
+  if (useDb) {
+    await Promise.all(userAssets.value.map((asset) => putUserAssetSource(asset.id, asset.src)))
+  }
+  const stored: StoredUserAsset[] = userAssets.value.map((asset) => ({
+    id: asset.id,
+    type: asset.type,
+    sub: asset.sub,
+    label: asset.label,
+    color: asset.color,
+    w: asset.w,
+    h: asset.h,
+    shape: asset.shape,
+    source: asset.source,
+    spuId: asset.spuId,
+    createdAt: asset.createdAt,
+    updatedAt: asset.updatedAt,
+    src: useDb ? undefined : asset.src,
+  }))
+  try {
+    Taro.setStorageSync(USER_ASSETS_KEY, stored)
+  } catch (_) {}
+}
+async function loadUserAssets() {
+  try {
+    const records = Taro.getStorageSync(USER_ASSETS_KEY)
+    if (!Array.isArray(records)) return
+    const hydrated = await Promise.all(records.map(async (record: Partial<StoredUserAsset>) => {
+      if (!record?.id || !record.createdAt) return undefined
+      const src = record.src || await getUserAssetSource(record.id)
+      if (!src) return undefined
+      const sub = record.sub || '其他'
+      const shape = record.shape || guessAssetShape((record.type as UserAsset['type']) || '谷子', sub)
+      const size = defaultAssetSize(sub, shape)
+      return {
+        id: record.id,
+        type: (record.type as UserAsset['type']) || '谷子',
+        sub,
+        label: record.label || sub,
+        color: record.color || '#fff',
+        w: record.w || size.w,
+        h: record.h || size.h,
+        shape,
+        src,
+        source: record.source || 'import',
+        spuId: record.spuId,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt || record.createdAt,
+      } as UserAsset
+    }))
+    userAssets.value = hydrated
+      .filter((asset): asset is UserAsset => !!asset)
+      .sort((a, b) => b.createdAt - a.createdAt)
+  } catch (_) {}
+}
+async function createImportedAsset(src: string, options?: { type?: UserAsset['type']; sub?: string; label?: string }) {
+  const type: UserAsset['type'] = options?.type || (category.value === '装饰' ? '装饰' : '谷子')
+  const sub = options?.sub || (subCat.value === '全部' ? '其他' : subCat.value)
+  const shape = guessAssetShape(type, sub)
+  const size = defaultAssetSize(sub, shape)
+  const createdAt = Date.now()
+  const id = `asset_${createdAt}_${Math.random().toString(36).slice(2, 7)}`
+  const storedSrc = await imageSourceToDataUrl(src)
+  const asset: UserAsset = {
+    id,
+    type,
+    sub,
+    label: (options?.label || '').trim() || (sub === '其他' ? '导入图片' : sub),
+    color: '#fff',
+    w: size.w,
+    h: size.h,
+    shape,
+    src: storedSrc,
+    source: 'import',
+    createdAt,
+    updatedAt: createdAt,
+  }
+  userAssets.value = [asset, ...userAssets.value]
+  await persistUserAssets()
+  return asset
+}
+function resetImportDraft() {
+  importDraft.src = ''
+  importDraft.storedSrc = ''
+  importDraft.editAssetId = ''
+  importDraft.type = '谷子'
+  importDraft.sub = '其他'
+  importDraft.label = ''
+}
+async function openImportEditor(src: string) {
+  const type: UserAsset['type'] = category.value === '装饰' ? '装饰' : '谷子'
+  const subOptions = (SUBCATS[type] || ['全部']).filter((item) => item !== '全部')
+  const sub = subCat.value !== '全部' && subOptions.includes(subCat.value) ? subCat.value : (subOptions[0] || '其他')
+  let storedSrc = src
+  try {
+    Taro.showLoading({ title: '准备图片' })
+    storedSrc = await imageSourceToDataUrl(src)
+  } catch (_) {
+    Taro.showToast({ title: '图片读取异常，已尝试继续', icon: 'none' })
+  } finally {
+    Taro.hideLoading()
+  }
+  importDraft.src = src
+  importDraft.storedSrc = storedSrc
+  importDraft.editAssetId = ''
+  importDraft.type = type
+  importDraft.sub = sub
+  importDraft.label = sub === '其他' ? '导入图片' : sub
+  importEditorOpen.value = true
+}
+function openImportEditorFromAsset(asset: UserAsset) {
+  importDraft.src = asset.src
+  importDraft.storedSrc = asset.src
+  importDraft.editAssetId = asset.id
+  importDraft.type = asset.type
+  importDraft.sub = asset.sub
+  importDraft.label = asset.label
+  importEditorOpen.value = true
+}
+function onImportLabelInput(event: any) {
+  importDraft.label = event?.detail?.value || ''
+}
+function setImportDraftSub(sub: string) {
+  importDraft.sub = sub
+  if (!importDraft.label || importDraftSubcats.value.includes(importDraft.label)) importDraft.label = sub
+}
+function cancelImportEditor() {
+  importEditorOpen.value = false
+  resetImportDraft()
+}
+async function confirmImportEditor() {
+  if (!importDraft.storedSrc && !importDraft.src) return
+  if (importDraft.editAssetId) {
+    const index = userAssets.value.findIndex((item) => item.id === importDraft.editAssetId)
+    if (index < 0) return
+    const src = importDraft.storedSrc || importDraft.src
+    const sub = importDraft.sub
+    const shape = guessAssetShape(importDraft.type, sub)
+    const size = defaultAssetSize(sub, shape)
+    const updated: UserAsset = {
+      ...userAssets.value[index],
+      type: importDraft.type,
+      sub,
+      label: importDraft.label.trim() || (sub === '其他' ? '导入图片' : sub),
+      w: size.w,
+      h: size.h,
+      shape,
+      src,
+      updatedAt: Date.now(),
+    }
+    userAssets.value = [
+      updated,
+      ...userAssets.value.slice(0, index),
+      ...userAssets.value.slice(index + 1),
+    ]
+    doc.layers = doc.layers.map((layer) => {
+      if (layer.assetId !== updated.id) return layer
+      return {
+        ...layer,
+        type: updated.type,
+        sub: updated.sub,
+        label: updated.label,
+        w: updated.w,
+        h: updated.h,
+        shape: updated.shape,
+        src: updated.src,
+      }
+    })
+    await persistUserAssets()
+    importEditorOpen.value = false
+    resetImportDraft()
+    commit()
+    Taro.showToast({ title: '已更新', icon: 'none' })
+    return
+  }
+  await createImportedAsset(importDraft.storedSrc || importDraft.src, {
+    type: importDraft.type,
+    sub: importDraft.sub,
+    label: importDraft.label,
+  })
+  importEditorOpen.value = false
+  resetImportDraft()
+  Taro.showToast({ title: '已导入', icon: 'none' })
+}
+
 function chooseImageLayer() {
   Taro.chooseImage({
     count: 1,
     sizeType: ['compressed', 'original'],
     sourceType: ['album', 'camera'],
-    success: (res) => {
+    success: async (res) => {
       const src = res.tempFilePaths && res.tempFilePaths[0]
       if (!src) return
-      addLayer({ type: '图片', label: '导入图片', color: '#fff', w: 72, h: 72, shape: 'rect', src })
+      await openImportEditor(src)
     },
     fail: () => Taro.showToast({ title: '未选择图片', icon: 'none' }),
   })
 }
 
 function saveWork(showToast = true) {
-  const data = { version: STORAGE_VERSION, ...snapshot(), selectedId: selectedId.value, seq }
+  const data = { version: STORAGE_VERSION, ...storageSnapshot(), selectedId: selectedId.value, seq }
   try {
     Taro.setStorageSync(STORAGE_KEY, data)
     if (showToast) Taro.showToast({ title: '已保存', icon: 'none' })
@@ -1077,228 +1918,237 @@ function loadWork() {
       curBoard: typeof data.curBoard === 'number' ? data.curBoard : -1,
       curBag: data.curBag || 0,
       showGrid: data.version === STORAGE_VERSION && typeof data.showGrid === 'boolean' ? data.showGrid : false,
+      boardTransform: data.version === STORAGE_VERSION ? data.boardTransform : undefined,
     })
+    if (data.version !== STORAGE_VERSION && curBoard.value >= 0) resetBoardTransform(true)
     selectedId.value = data.selectedId || ''
     seq = data.seq || data.layers.length
   } catch (_) {}
 }
 
-function exportImage() {
+function formatExportHistoryTime(ts: number) {
+  const d = new Date(ts)
+  const pad = (n: number) => `${n}`.padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+function normalizeExportRecord(r: Partial<StoredExportHistoryRecord>, i: number, src = r.src): ExportHistoryRecord | undefined {
+  if (!r || !src || !r.createdAt) return undefined
+  return {
+    id: r.id || `${r.createdAt}-${i}`,
+    src,
+    createdAt: r.createdAt,
+    name: r.name || '导出图',
+    timeText: formatExportHistoryTime(r.createdAt),
+  }
+}
+function canUseExportHistoryDb() {
+  return process.env.TARO_ENV === 'h5' && typeof indexedDB !== 'undefined'
+}
+function openExportHistoryDb(): Promise<IDBDatabase | undefined> {
+  if (!canUseExportHistoryDb()) return Promise.resolve(undefined)
+  return new Promise((resolve) => {
+    const req = indexedDB.open(EXPORT_HISTORY_DB_NAME, 1)
+    req.onupgradeneeded = () => {
+      const db = req.result
+      if (!db.objectStoreNames.contains(EXPORT_HISTORY_STORE)) db.createObjectStore(EXPORT_HISTORY_STORE)
+    }
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => resolve(undefined)
+  })
+}
+async function putExportHistorySource(id: string, src: string) {
+  const db = await openExportHistoryDb()
+  if (!db) return false
+  return new Promise<boolean>((resolve) => {
+    const tx = db.transaction(EXPORT_HISTORY_STORE, 'readwrite')
+    tx.objectStore(EXPORT_HISTORY_STORE).put(src, id)
+    tx.oncomplete = () => { db.close(); resolve(true) }
+    tx.onerror = () => { db.close(); resolve(false) }
+  })
+}
+async function getExportHistorySource(id: string) {
+  const db = await openExportHistoryDb()
+  if (!db) return ''
+  return new Promise<string>((resolve) => {
+    const tx = db.transaction(EXPORT_HISTORY_STORE, 'readonly')
+    const req = tx.objectStore(EXPORT_HISTORY_STORE).get(id)
+    req.onsuccess = () => resolve(typeof req.result === 'string' ? req.result : '')
+    req.onerror = () => resolve('')
+    tx.oncomplete = () => db.close()
+    tx.onerror = () => db.close()
+  })
+}
+async function deleteExportHistorySource(id: string) {
+  const db = await openExportHistoryDb()
+  if (!db) return
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction(EXPORT_HISTORY_STORE, 'readwrite')
+    tx.objectStore(EXPORT_HISTORY_STORE).delete(id)
+    tx.oncomplete = () => { db.close(); resolve() }
+    tx.onerror = () => { db.close(); resolve() }
+  })
+}
+async function persistExportHistory() {
+  const useDb = canUseExportHistoryDb()
+  if (useDb) {
+    await Promise.all(exportHistory.value.map((record) => putExportHistorySource(record.id, record.src)))
+  }
+  const keepIds = new Set(exportHistory.value.map((record) => record.id))
+  const storedRecords: StoredExportHistoryRecord[] = exportHistory.value.map((record) => ({
+    id: record.id,
+    createdAt: record.createdAt,
+    name: record.name,
+    timeText: record.timeText,
+    src: useDb ? undefined : record.src,
+  }))
+  try {
+    Taro.setStorageSync(EXPORT_HISTORY_KEY, storedRecords)
+  } catch (_) {}
+  if (useDb) {
+    // Best-effort pruning; old inline-storage records are harmless if they were never mirrored.
+    const records = Taro.getStorageSync(EXPORT_HISTORY_KEY)
+    if (Array.isArray(records)) {
+      await Promise.all(records.filter((r) => r?.id && !keepIds.has(r.id)).map((r) => deleteExportHistorySource(r.id)))
+    }
+  }
+}
+async function loadExportHistory() {
+  try {
+    const records = Taro.getStorageSync(EXPORT_HISTORY_KEY)
+    if (!Array.isArray(records)) return
+    const hydrated = await Promise.all(records.map(async (r, i) => {
+      const src = r?.src || await getExportHistorySource(r?.id || '')
+      return normalizeExportRecord(r, i, src)
+    }))
+    exportHistory.value = hydrated
+      .filter((r): r is ExportHistoryRecord => !!r)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, EXPORT_HISTORY_LIMIT)
+  } catch (_) {}
+}
+async function addExportHistory(src: string) {
+  const createdAt = Date.now()
+  const record: ExportHistoryRecord = {
+    id: `${createdAt}-${Math.random().toString(36).slice(2, 7)}`,
+    src,
+    createdAt,
+    name: `${bags[curBag.value].label}导出图`,
+    timeText: formatExportHistoryTime(createdAt),
+  }
+  exportHistory.value = [record, ...exportHistory.value].slice(0, EXPORT_HISTORY_LIMIT)
+  await persistExportHistory()
+}
+async function openExportHistory() {
+  await loadExportHistory()
+  resultPreviewOpen.value = false
+  exportHistoryOpen.value = true
+}
+function closeExportHistory() {
+  exportHistoryOpen.value = false
+}
+async function previewExportHistory(record: ExportHistoryRecord) {
+  const src = record.src || await getExportHistorySource(record.id)
+  if (!src) {
+    Taro.showToast({ title: '历史图片已失效', icon: 'none' })
+    return
+  }
+  resultSrc.value = src
+  exportHistoryOpen.value = false
+  resultPreviewOpen.value = true
+}
+
+async function exportImage() {
+  resultSrc.value = ''
+  resultPreviewOpen.value = false
+  exportHistoryOpen.value = false
+  syncBoardTransformFromLayer()
   saveWork(false)
-  const q = Taro.createSelectorQuery()
-  q.select('#exportCanvas').fields({ node: true }).exec(async (res) => {
-    let node: any = res && res[0] && res[0].node
-    // H5 回退：Taro node 查询为空时，直接取真实 canvas DOM
-    if ((!node || !node.getContext) && typeof document !== 'undefined') {
-      const el: any = document.querySelector('#exportCanvas')
-      node = el && (el.tagName === 'CANVAS' ? el : el.querySelector && el.querySelector('canvas'))
-    }
-    if (!node || !node.getContext) { Taro.showToast({ title: '画布未就绪', icon: 'none' }); return }
-    const scale = EXPORT_SIZE / cw
-    node.width = EXPORT_SIZE
-    node.height = EXPORT_SIZE
-    const ctx = node.getContext('2d')
-    ctx.clearRect(0, 0, EXPORT_SIZE, EXPORT_SIZE)
-    ctx.save()
-    ctx.scale(scale, scale)
+  const src = await exportEditorImage({
+    canvasId: 'exportCanvas',
+    cw,
+    ch,
+    win,
+    curBoard: curBoard.value,
+    curBag: curBag.value,
+    boardLayer: hasBoardLayer.value ? { ...boardLayer } : undefined,
+    layers: cloneLayers(),
+  })
+  if (src) {
+    resultSrc.value = src
+    await addExportHistory(src)
+    resultPreviewOpen.value = true
+  }
+}
+function closeExportPreview() {
+  resultPreviewOpen.value = false
+}
+const EXPORT_FILE_NAME = 'gooda-export.png'
+
+function dataUrlToFile(dataUrl: string, fileName = EXPORT_FILE_NAME) {
+  if (typeof atob === 'undefined' || typeof File === 'undefined') return undefined
+  const parts = dataUrl.split(',')
+  if (parts.length < 2) return undefined
+  const mime = parts[0].match(/data:([^;]+);base64/)?.[1] || 'image/png'
+  const binary = atob(parts[1])
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  return new File([bytes], fileName, { type: mime })
+}
+
+function triggerH5Download(src: string, file?: File) {
+  if (typeof document === 'undefined') return false
+  let href = src
+  let objectUrl = ''
+  if (file && typeof URL !== 'undefined' && URL.createObjectURL) {
+    objectUrl = URL.createObjectURL(file)
+    href = objectUrl
+  }
+  const a = document.createElement('a')
+  a.href = href
+  a.download = `gooda-export-${Date.now()}.png`
+  a.rel = 'noopener'
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  if (objectUrl) setTimeout(() => URL.revokeObjectURL(objectUrl), 1200)
+  return true
+}
+
+async function saveH5ExportImage(src: string) {
+  const file = src.startsWith('data:') ? dataUrlToFile(src) : undefined
+  const nav = typeof navigator !== 'undefined' ? (navigator as any) : undefined
+  if (file && nav?.share && nav?.canShare?.({ files: [file] })) {
     try {
-      ctx.save()
-      ctx.beginPath()
-      ctx.rect(win.x, win.y, win.w, win.h)
-      ctx.clip()
-      ctx.fillStyle = '#f8f1e5'
-      ctx.fillRect(win.x, win.y, win.w, win.h)
-      if (curBoard.value >= 0) {
-        const base = await loadImg(node, boards[curBoard.value].src)
-        const bw = base.width || 1, bh = base.height || 1
-        const bs = Math.max(win.w / bw, win.h / bh)
-        const dw = bw * bs, dh = bh * bs
-        ctx.drawImage(base, win.x + (win.w - dw) / 2, win.y + (win.h - dh) / 2, dw, dh)
-      }
-      for (const ly of doc.layers) {
-        ctx.save()
-        ctx.translate(win.x + ly.x, win.y + ly.y)
-        ctx.rotate((ly.rotation * Math.PI) / 180)
-        ctx.scale(ly.flipX ? -ly.scale : ly.scale, ly.scale)
-        ctx.globalAlpha = ly.opacity
-        if (ly.src) {
-          const img = await loadImg(node, ly.src)
-          drawRoundedImage(ctx, img, -ly.w / 2, -ly.h / 2, ly.w, ly.h, ly.shape === 'circle' ? ly.w / 2 : 8)
-        } else {
-          ctx.fillStyle = ly.color
-          roundRectPath(ctx, -ly.w / 2, -ly.h / 2, ly.w, ly.h, ly.shape === 'circle' ? ly.w / 2 : 8)
-          ctx.fill()
-          ctx.fillStyle = '#333'
-          ctx.font = '13px sans-serif'
-          ctx.textAlign = 'center'
-          ctx.textBaseline = 'middle'
-          ctx.fillText(ly.label, 0, 0)
-        }
-        ctx.restore()
-      }
-      ctx.restore()
-      const front = await loadImg(node, bags[curBag.value].front)
-      ctx.drawImage(front, 0, 0, cw, ch)
-    } catch (e) {
-      Taro.showToast({ title: '合成失败', icon: 'none' })
-      ctx.restore()
+      await nav.share({
+        files: [file],
+        title: '谷搭导出图',
+      })
+      Taro.showToast({ title: '已打开保存面板', icon: 'none' })
       return
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return
     }
-    ctx.restore()
-    // H5 直接用 toDataURL（可靠）；weapp 走 canvasToTempFilePath
-    if (process.env.TARO_ENV === 'h5' && typeof node.toDataURL === 'function') {
-      try {
-        resultSrc.value = node.toDataURL('image/png')
-        Taro.showToast({ title: '已导出', icon: 'none' })
-        return
-      } catch (_) {}
-    }
-    Taro.canvasToTempFilePath({
-      canvas: node,
-      success: (r) => { resultSrc.value = r.tempFilePath; Taro.showToast({ title: '已导出', icon: 'none' }) },
-      fail: () => { try { resultSrc.value = (node as any).toDataURL('image/png') } catch (_) {} },
-    })
+  }
+  if (triggerH5Download(src, file)) {
+    Taro.showToast({ title: '如未保存，请长按图片', icon: 'none' })
+    return
+  }
+  Taro.showToast({ title: '请长按图片保存', icon: 'none' })
+}
+
+async function saveExportImage() {
+  if (!resultSrc.value) return
+  if (process.env.TARO_ENV === 'h5') {
+    await saveH5ExportImage(resultSrc.value)
+    return
+  }
+  Taro.saveImageToPhotosAlbum({
+    filePath: resultSrc.value,
+    success: () => Taro.showToast({ title: '已保存图片', icon: 'none' }),
+    fail: () => Taro.showToast({ title: '保存失败，请检查相册权限', icon: 'none' }),
   })
 }
 </script>
 
-<style>
-.page { height: 100vh; height: 100dvh; background: radial-gradient(circle at 50% 18%, #fff 0%, #f8f5f0 42%, #f4f5f7 100%); color: #1d1d1f; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif; }
-.topbar { flex: 0 0 52PX; display: flex; align-items: center; justify-content: space-between; padding: 12PX 14PX 7PX; gap: 12PX; background: transparent; border-bottom: 0; backdrop-filter: none; box-sizing: border-box; }
-.brand { height: 32PX; min-width: 0; display: flex; align-items: center; gap: 6PX; }
-.brand-logo { width: 25PX; height: 25PX; display: block; }
-.brand-wordmark { width: 48PX; height: 22PX; display: block; }
-.title { display: block; font-size: 17PX; font-weight: 750; color: #1d1d1f; line-height: 22PX; letter-spacing: 0; }
-.subtitle { display: block; margin-top: 1PX; font-size: 11PX; color: #86868b; }
-.top-actions { display: flex; align-items: center; gap: 7PX; }
-.btn, .icon-btn { height: 30PX; min-width: 30PX; padding: 0 12PX; border-radius: 10PX; background: #1d1d1f; color: #fff; font-size: 13PX; display: flex; align-items: center; justify-content: center; box-sizing: border-box; }
-.btn.ghost, .icon-btn { background: rgba(255,255,255,.76); color: #1d1d1f; border: 1PX solid rgba(60,60,67,.12); }
-.icon-btn.disabled { opacity: .35; }
-.icon-btn { position: relative; padding: 0; }
-.top-icon-img { width: 18PX; height: 18PX; display: block; }
-.stage-wrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; justify-content: center; padding: 2PX 0 8PX; box-sizing: border-box; }
-.stage-wrap::before { content: ""; position: absolute; left: 6PX; right: 6PX; top: -2PX; bottom: 4PX; border-radius: 24PX; background: radial-gradient(circle at 50% 34%, rgba(255,255,255,.88), rgba(249,244,237,.76) 52%, rgba(244,242,240,.60)); border: 1PX solid rgba(255,255,255,.66); box-shadow: inset 0 1PX 0 rgba(255,255,255,.58), 0 14PX 34PX rgba(60,60,67,.05); pointer-events: none; }
-.stage-tools { position: absolute; z-index: 5; top: 10PX; right: 14PX; display: flex; justify-content: flex-end; gap: 8PX; }
-.tool-pill { height: 28PX; padding: 0 13PX; border-radius: 999PX; background: rgba(255,255,255,.58); border: 1PX solid rgba(255,255,255,.82); color: #6e6e73; font-size: 12PX; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(22PX) saturate(1.35); box-shadow: 0 8PX 24PX rgba(60,60,67,.08); }
-.tool-pill.on { background: #1d1d1f; color: #fff; border-color: #1d1d1f; }
-.stage { position: relative; z-index: 1; margin: 0 auto; background: transparent; }
-.floating-layers { position: fixed; left: 0; top: 0; z-index: 1100; width: 52PX; height: 52PX; border-radius: 26PX; background: rgba(255,255,255,.78); border: 1PX solid rgba(255,255,255,.9); box-shadow: 0 16PX 34PX rgba(60,60,67,.16), inset 0 1PX 0 rgba(255,255,255,.8); display: flex; flex-direction: column; align-items: center; justify-content: center; color: #1d1d1f; touch-action: none; will-change: transform; backdrop-filter: blur(24PX) saturate(1.45); cursor: grab; -webkit-user-select: none; user-select: none; -webkit-user-drag: none; transition: transform .34s cubic-bezier(.18,.89,.32,1.12), opacity .18s ease, box-shadow .18s ease, background .18s ease; }
-.floating-layers.active { background: rgba(255,255,255,.9); color: #0071e3; border-color: rgba(0,113,227,.24); box-shadow: 0 18PX 38PX rgba(0,113,227,.18), inset 0 1PX 0 rgba(255,255,255,.86); }
-.floating-layers.dragging { transition: none; opacity: .92; cursor: grabbing; transform-origin: center; box-shadow: 0 22PX 44PX rgba(60,60,67,.20), inset 0 1PX 0 rgba(255,255,255,.8); }
-.floating-icon-img { width: 25PX; height: 25PX; display: block; pointer-events: none; user-select: none; -webkit-user-drag: none; }
-.floating-count { margin-top: 2PX; font-size: 11PX; line-height: 11PX; font-weight: 650; pointer-events: none; user-select: none; }
-.window { position: absolute; overflow: hidden; background: #f3efe7; border-radius: 7PX; }
-.window.grid::after { content: ""; position: absolute; inset: 0; pointer-events: none; background-image: linear-gradient(rgba(17,24,39,.10) 1PX, transparent 1PX), linear-gradient(90deg, rgba(17,24,39,.10) 1PX, transparent 1PX); background-size: 24PX 24PX; opacity: .35; z-index: 8; }
-.fill { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
-.board-fill { background-position: center; background-repeat: no-repeat; background-size: cover; }
-.empty-board { background: linear-gradient(180deg, #fbf6eb 0%, #f4eadb 100%); }
-.bag-front { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 999; pointer-events: none; }
-.selection-overlay { position: absolute; z-index: 1200; pointer-events: none; touch-action: none; }
-.layer { position: absolute; touch-action: none; }
-.layer.locked { opacity: .86; }
-.layer-inner { width: 100%; height: 100%; border-radius: 9PX; display: flex; align-items: center; justify-content: center; box-shadow: 0 5PX 14PX rgba(15,23,42,.14); overflow: hidden; }
-.layer-inner.circle, .cell-block.circle, .layer-dot.circle { border-radius: 999PX; }
-.layer.selected .layer-inner { outline: 2PX dashed rgba(0,113,227,.9); outline-offset: 2PX; }
-.layer.locked.selected .layer-inner { outline-style: solid; }
-.layer-label { font-size: 12PX; color: #333; }
-.layer-img { width: 100%; height: 100%; }
-.layer-handle { position: absolute; z-index: 40; width: 22PX; height: 22PX; border-radius: 999PX; background: rgba(255,255,255,.74); border: 1PX solid rgba(255,255,255,.86); box-shadow: 0 6PX 16PX rgba(15,23,42,.14); color: #1d1d1f; display: flex; align-items: center; justify-content: center; transform: translate(-50%, -50%) rotate(var(--handle-rotation)) scale(var(--handle-scale)); touch-action: none; backdrop-filter: blur(18PX) saturate(1.42); pointer-events: auto; overflow: hidden; }
-.handle-icon { width: 12PX; height: 12PX; display: block; opacity: .88; pointer-events: none; }
-.handle-copy .handle-icon { width: 13PX; height: 13PX; }
-.handle-mirror .handle-icon { width: 13PX; height: 13PX; }
-.handle-delete .handle-icon { width: 11PX; height: 11PX; }
-.handle-rotate .handle-icon { width: 13PX; height: 13PX; }
-.handle-copy { left: -6PX; top: -6PX; color: #0071e3; }
-.handle-delete { left: calc(100% + 6PX); top: -6PX; }
-.handle-mirror { left: -6PX; top: calc(100% + 6PX); }
-.handle-rotate { left: calc(100% + 6PX); top: calc(100% + 6PX); cursor: grab; }
-.bottom-dock { position: relative; flex: 0 0 auto; padding: 0 0 max(8PX, env(safe-area-inset-bottom)); transition: flex-basis .24s ease; }
-.bottom-dock.dragging { transition: none; }
-.bottom-dock.collapsed { flex: 0 0 38PX; }
-.inspector, .panel { margin: 0 10PX; background: rgba(255,255,255,.78); border: 1PX solid rgba(255,255,255,.88); border-radius: 24PX; padding: 10PX 12PX; box-sizing: border-box; backdrop-filter: blur(26PX) saturate(1.38); box-shadow: 0 -12PX 34PX rgba(60,60,67,.10), inset 0 1PX 0 rgba(255,255,255,.75); }
-.inspector { position: absolute; left: 0; right: 0; bottom: calc(218PX + 18PX); z-index: 900; min-height: 0; padding: 0; display: flex; justify-content: center; pointer-events: none; border: 0; background: transparent; box-shadow: none; overflow: visible; }
-.material-panel { height: 218PX; min-height: 0; border-radius: 26PX 26PX 18PX 18PX; display: flex; flex-direction: column; transition: transform .32s cubic-bezier(.18,.89,.32,1.08), opacity .2s ease; will-change: transform; }
-.bottom-dock.dragging .material-panel { transition: none; }
-.bottom-dock.collapsed .material-panel { position: absolute; left: 0; right: 0; bottom: max(8PX, env(safe-area-inset-bottom)); transform: translateY(calc(100% - 34PX)); opacity: .9; pointer-events: none; }
-.bottom-dock.collapsed .sheet-grabber { pointer-events: auto; margin-top: 2PX; }
-.bottom-dock.collapsed .panel-head, .bottom-dock.collapsed .cats, .bottom-dock.collapsed .row { opacity: 0; pointer-events: none; }
-.inspector-head, .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10PX; }
-.inspector-head { grid-row: 1 / 3; grid-column: 1; align-self: stretch; align-items: flex-start; padding-top: 2PX; }
-.ctrl-name { font-size: 13PX; font-weight: 700; color: #242733; line-height: 17PX; display: block; max-width: 50PX; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ctrl-meta, .panel-link { font-size: 12PX; color: #7c8190; }
-.ctrl-scroll { grid-column: 2; grid-row: 1; width: 100%; min-width: 0; height: 26PX; white-space: nowrap; overflow-x: auto; overflow-y: hidden; }
-.ctrl-row { display: inline-flex; flex-wrap: nowrap; gap: 6PX; }
-.cbtn { flex: 0 0 auto; height: 26PX; background: #f1f5f9; color: #334155; padding: 0 10PX; border-radius: 7PX; font-size: 12PX; display: flex; align-items: center; justify-content: center; box-sizing: border-box; }
-.cbtn.primary { background: #eef2ff; color: #3730a3; }
-.cbtn.danger { background: #fee2e2; color: #b91c1c; }
-.nudge-row { display: flex; gap: 6PX; overflow: hidden; pointer-events: auto; padding: 4PX 6PX; border-radius: 999PX; background: rgba(255,255,255,.60); border: 1PX solid rgba(255,255,255,.72); box-shadow: 0 10PX 24PX rgba(60,60,67,.08), inset 0 1PX 0 rgba(255,255,255,.72); backdrop-filter: blur(22PX) saturate(1.4); }
-.nudge-group { width: 112PX; height: 28PX; border-radius: 999PX; background: rgba(255,255,255,.32); display: grid; grid-template-columns: 28PX minmax(54PX, 1fr) 28PX; align-items: center; overflow: hidden; border: 1PX solid rgba(255,255,255,.38); box-shadow: inset 0 1PX 0 rgba(255,255,255,.52); backdrop-filter: blur(18PX) saturate(1.3); }
-.nudge-group:nth-child(2) { width: 108PX; grid-template-columns: 30PX minmax(48PX, 1fr) 30PX; }
-.nudge-label { display: none; }
-.nudge-value { color: #1d1d1f; font-size: 13PX; font-weight: 650; text-align: center; font-variant-numeric: tabular-nums; text-shadow: 0 1PX 6PX rgba(255,255,255,.8); }
-.nudge-input { width: 100%; height: 28PX; min-width: 0; padding: 0 2PX; border: 0; outline: 0; background: transparent; color: #1d1d1f; font-size: 13PX; line-height: 28PX; font-weight: 650; text-align: center; font-variant-numeric: tabular-nums; text-shadow: 0 1PX 6PX rgba(255,255,255,.8); box-sizing: border-box; display: flex; align-items: center; justify-content: center; }
-.nudge-btn { height: 27PX; width: 27PX; border-radius: 0; display: flex; align-items: center; justify-content: center; color: #1d1d1f; font-size: 16PX; border-left: 1PX solid rgba(60,60,67,.08); background: transparent; text-shadow: 0 1PX 6PX rgba(255,255,255,.8); }
-.nudge-btn:first-child { border-left: 0; }
-.zoom-btn { font-size: 16PX; }
-.sheet-grabber { width: 72PX; height: 22PX; border-radius: 999PX; margin: -10PX auto 0; flex: 0 0 auto; position: relative; touch-action: none; cursor: grab; transition: background .16s ease, box-shadow .16s ease; }
-.sheet-grabber::after { content: ""; position: absolute; left: 15PX; right: 15PX; top: 9PX; height: 4PX; border-radius: 999PX; background: rgba(60,60,67,.24); transition: background .16s ease, transform .16s ease; }
-.bottom-dock.dragging .sheet-grabber { background: rgba(60,60,67,.10); box-shadow: inset 0 1PX 0 rgba(255,255,255,.35); }
-.bottom-dock.dragging .sheet-grabber::after { background: rgba(60,60,67,.34); transform: scaleX(1.16); }
-.panel-title-wrap { display: flex; align-items: center; gap: 8PX; }
-.panel-title { font-size: 17PX; color: #1d1d1f; font-weight: 760; }
-.sparkle { color: #b8bcc4; font-size: 14PX; }
-.import-pill { height: 30PX; padding: 0 12PX; border-radius: 999PX; background: rgba(255,255,255,.58); border: 1PX solid rgba(60,60,67,.08); color: #6e6e73; font-size: 12PX; display: flex; align-items: center; gap: 5PX; box-shadow: inset 0 1PX 0 rgba(255,255,255,.78); }
-.import-icon { font-size: 14PX; }
-.cats { display: flex; gap: 9PX; margin: 12PX 0 12PX; overflow-x: auto; flex: 0 0 auto; }
-.cat { flex: 0 0 auto; min-width: 56PX; height: 30PX; padding: 0 12PX; border-radius: 999PX; background: rgba(242,242,247,.82); color: #7b7784; font-size: 14PX; display: flex; align-items: center; justify-content: center; box-sizing: border-box; }
-.cat.on { background: rgba(255,222,112,.74); color: #1d1d1f; font-weight: 760; box-shadow: inset 0 1PX 0 rgba(255,255,255,.65); }
-.row { width: 100%; white-space: nowrap; flex: 1 1 auto; min-height: 0; }
-.row-inner { height: 100%; display: inline-flex; align-items: stretch; gap: 12PX; padding: 0 2PX 2PX; box-sizing: border-box; }
-.cell { width: 90PX; display: inline-flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6PX; }
-.cell-card { position: relative; width: 90PX; height: 90PX; border-radius: 20PX; background: rgba(248,249,251,.84); border: 1PX solid rgba(255,255,255,.72); display: flex; align-items: center; justify-content: center; box-shadow: 0 10PX 22PX rgba(60,60,67,.08), inset 0 1PX 0 rgba(255,255,255,.82); overflow: hidden; }
-.cell-thumb { width: 78PX; height: 78PX; border-radius: 16PX; border: 1PX solid rgba(60,60,67,.08); object-fit: cover; }
-.cell-block { position: relative; width: 68PX; height: 68PX; border-radius: 16PX; box-shadow: 0 8PX 16PX rgba(60,60,67,.12), inset 0 1PX 0 rgba(255,255,255,.55); }
-.cell-block::before { content: ""; position: absolute; inset: 3PX; border-radius: inherit; border: 1PX solid rgba(255,255,255,.54); pointer-events: none; }
-.cell-heart { position: absolute; right: 6PX; bottom: 4PX; color: rgba(255,255,255,.48); font-size: 13PX; line-height: 13PX; }
-.cell-none { width: 68PX; height: 68PX; border-radius: 16PX; border: 1PX solid rgba(60,60,67,.10); background: rgba(242,242,247,.85); display: flex; align-items: center; justify-content: center; }
-.cell-none-icon { width: 42PX; height: 42PX; display: block; opacity: .82; }
-.cell-plus { width: 68PX; height: 68PX; border-radius: 16PX; border: 1PX dashed #cbd5e1; display: flex; align-items: center; justify-content: center; font-size: 25PX; color: #8e99a8; background: rgba(255,255,255,.5); }
-.cell-label { font-size: 13PX; color: #1d1d1f; max-width: 90PX; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.drawer-mask { position: fixed; inset: 0; z-index: 1250; background: rgba(15, 23, 42, .18); }
-.layer-drawer { position: fixed; left: 0; right: 0; bottom: 0; height: 48vh; z-index: 1300; padding: 8PX 12PX max(14PX, env(safe-area-inset-bottom)); border-radius: 18PX 18PX 0 0; background: rgba(255,255,255,.88); border: 1PX solid rgba(255,255,255,.82); box-shadow: 0 -16PX 40PX rgba(15, 23, 42, .18); transform: translateY(110%); transition: transform .32s cubic-bezier(.18,.89,.32,1.08); box-sizing: border-box; backdrop-filter: blur(28PX) saturate(1.35); will-change: transform; }
-.layer-drawer.open { transform: translateY(0); }
-.layer-drawer.dragging { transition: none; }
-.drawer-handle { width: 74PX; height: 22PX; border-radius: 999PX; margin: -2PX auto 4PX; position: relative; touch-action: none; cursor: grab; transition: background .16s ease, box-shadow .16s ease; }
-.drawer-handle::after { content: ""; position: absolute; left: 15PX; right: 15PX; top: 8PX; height: 4PX; border-radius: 999PX; background: rgba(60,60,67,.24); transition: background .16s ease, transform .16s ease; }
-.layer-drawer.dragging .drawer-handle { background: rgba(60,60,67,.10); box-shadow: inset 0 1PX 0 rgba(255,255,255,.35); }
-.layer-drawer.dragging .drawer-handle::after { background: rgba(60,60,67,.34); transform: scaleX(1.16); }
-.drawer-head { padding: 0 2PX; }
-.drawer-actions { display: flex; align-items: center; gap: 14PX; }
-.drawer-close { width: 28PX; height: 28PX; border-radius: 14PX; background: #f1f5f9; color: #334155; font-size: 20PX; line-height: 26PX; text-align: center; }
-.layer-scroll { height: calc(48vh - 82PX); margin-top: 10PX; }
-.empty-layers { height: 160PX; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 13PX; }
-.layer-list { margin-top: 10PX; display: flex; flex-direction: column; gap: 6PX; }
-.layer-slot { height: 36PX; display: grid; grid-template-columns: 24PX 1fr; align-items: center; gap: 6PX; }
-.layer-rank { color: rgba(60,60,67,.48); font-size: 12PX; font-weight: 650; line-height: 36PX; text-align: center; font-variant-numeric: tabular-nums; pointer-events: none; }
-.layer-row { position: relative; height: 36PX; display: grid; grid-template-columns: 26PX 18PX 1fr 24PX; align-items: center; gap: 8PX; border-radius: 10PX; padding: 0 7PX 0 4PX; background: rgba(248,250,252,.82); transform: translate3d(0, var(--row-shift, 0), 0); transition: transform .24s cubic-bezier(.2,.85,.2,1), background .18s ease, box-shadow .18s ease, opacity .18s ease; will-change: transform; }
-.layer-row.on { background: rgba(238,242,255,.86); color: #3730a3; }
-.layer-list.reordering .layer-row:not(.lifting) { transition: transform .26s cubic-bezier(.16,1,.3,1), background .18s ease; }
-.layer-row.lifting { z-index: 3; transform: translate3d(0, var(--row-shift, 0), 0) scale(1.018); background: rgba(255,255,255,.96); box-shadow: 0 14PX 30PX rgba(15,23,42,.18), inset 0 1PX 0 rgba(255,255,255,.82); opacity: .96; transition: transform .02s linear, background .18s ease, box-shadow .18s ease; }
-.layer-row.insert::before { content: ""; position: absolute; left: 12PX; right: 12PX; top: -4PX; height: 3PX; border-radius: 999PX; background: rgba(0,113,227,.72); box-shadow: 0 0 0 3PX rgba(0,113,227,.10); }
-.layer-row.settled { animation: rowSettle .22s cubic-bezier(.2,.8,.2,1); }
-@keyframes rowSettle {
-  0% { transform: scale(.985); background: rgba(229,241,255,.94); }
-  100% { transform: scale(1); }
-}
-.row-drag { width: 26PX; height: 36PX; display: flex; align-items: center; justify-content: center; color: #b6bdca; touch-action: none; cursor: grab; }
-.row-drag-icon { font-size: 15PX; line-height: 15PX; }
-.layer-dot { width: 18PX; height: 18PX; border-radius: 5PX; border: 1PX solid rgba(0,0,0,.08); }
-.layer-row-name { font-size: 13PX; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.row-lock { width: 24PX; height: 32PX; display: flex; align-items: center; justify-content: center; background: transparent; border: 0; box-shadow: none; }
-.row-lock.on { background: transparent; border: 0; }
-.row-lock-icon { width: 16PX; height: 16PX; display: block; opacity: .42; }
-.row-lock.on .row-lock-icon { opacity: .9; filter: none; }
-.export-canvas { position: fixed; left: -9999PX; top: -9999PX; width: 1280PX; height: 1280PX; }
-.result { margin: 12PX 16PX; }
-.result-img { width: 100%; border-radius: 8PX; border: 1PX solid #e5e7eb; }
-</style>
+<style src="../../styles/gooda-theme.css"></style>
